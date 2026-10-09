@@ -243,8 +243,7 @@ def accuracy_log(
     limit: int = Query(default=50, ge=1, le=500),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Update due outcomes and return running scored accuracy plus recent rows."""
-    update_prediction_outcomes(db)
+    """Return running scored accuracy plus recent rows; scoring is scheduler-owned."""
     total, correct = db.execute(
         select(
             func.count(PredictionLog.id),
