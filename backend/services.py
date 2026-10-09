@@ -74,6 +74,11 @@ def _request_json(url: str, *, params: dict | None = None, headers: dict | None 
 
 def fetch_live_quote() -> dict[str, Any]:
     """Try configured providers in order, then a recent last-known database quote."""
+    cache_ttl = max(0, int(os.getenv("PRICE_CACHE_SECONDS", "15")))
+    if _LAST_GOOD_QUOTE is not None and cache_ttl:
+        age = (utc_now() - _LAST_GOOD_QUOTE["timestamp"]).total_seconds()
+        if 0 <= age <= cache_ttl:
+            return {**_LAST_GOOD_QUOTE, "source": f"cached_{_LAST_GOOD_QUOTE['source']}"}
     failures: list[str] = []
     goldapi_key = os.getenv("GOLDAPI_API_KEY") or os.getenv("GOLD_API_KEY")
     if goldapi_key:
@@ -266,7 +271,9 @@ def _latest_feature_vector(session: Session) -> tuple[dict[str, Any], float, dat
             if data.empty or "close" not in data:
                 raise ValueError("CSV must contain at least one row and a close column")
             row = data.iloc[-1]
-            timestamp = pd.to_datetime(row["timestamp"], utc=True).to_pydatetime() if "timestamp" in data else utc_now()
+            if "timestamp" not in data:
+                raise ValueError("CSV must contain a timestamp column; an undated feature row cannot be treated as current")
+            timestamp = pd.to_datetime(row["timestamp"], utc=True).to_pydatetime()
             features = {
                 str(key): float(value)
                 for key, value in row.items()
@@ -302,6 +309,13 @@ def _prepare_feature_frame(features: dict[str, Any], model: Any, feature_names: 
 def create_prediction(session: Session) -> dict[str, Any]:
     """Run inference, persist a prediction, and return the API response shape."""
     features, reference_price, feature_timestamp = _latest_feature_vector(session)
+    max_age = max(0, int(os.getenv("FEATURE_MAX_AGE_SECONDS", "900")))
+    feature_age = (utc_now() - feature_timestamp).total_seconds()
+    if feature_age < 0 or feature_age > max_age:
+        raise ServiceUnavailable(
+            f"Latest engineered features are stale ({max(0, int(feature_age))} seconds old; "
+            f"maximum is {max_age}). Refresh the OHLCV feature pipeline before predicting."
+        )
     model, scaler, feature_names = _load_artifacts()
     model_input = _prepare_feature_frame(features, model, feature_names)
     try:
@@ -364,6 +378,12 @@ def update_prediction_outcomes(session: Session) -> None:
             .limit(1)
         )
         if observed is None:
+            continue
+        max_delay = max(0, int(os.getenv("OUTCOME_MAX_DELAY_SECONDS", "900")))
+        delay = (observed.timestamp - prediction.target_timestamp).total_seconds()
+        if delay < 0 or delay > max_delay:
+            # Leave the record pending instead of scoring against a price hours
+            # or days after its target (for example, across a weekend closure).
             continue
         change = observed.close / prediction.reference_price - 1.0
         threshold = float(os.getenv("NEUTRAL_RETURN_THRESHOLD", "0.001"))
