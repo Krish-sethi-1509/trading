@@ -267,20 +267,25 @@ def _latest_feature_vector(session: Session) -> tuple[dict[str, Any], float, dat
         select(PriceHistory).where(PriceHistory.symbol == "XAU/USD")
         .order_by(PriceHistory.timestamp.desc()).limit(1)
     ).all()
-    for row in rows:
-        stored = row.feature_vector or {}
-        if not stored.get("_source_timestamp") or stored.get("_source_price") is None:
-            continue
-        try:
-            timestamp = pd.to_datetime(stored["_source_timestamp"], utc=True, errors="raise").to_pydatetime()
-            features = {key: value for key, value in stored.items() if not key.startswith("_")}
-            return features, float(stored["_source_price"]), timestamp
-        except (TypeError, ValueError):
-            logger.warning("Ignoring malformed live feature snapshot at %s", row.timestamp)
-    raise ServiceUnavailable(
-        "No engineered live feature vector is stored. The scheduler must fetch recent completed "
-        "5-minute XAU/USD candles using TWELVE_DATA_API_KEY before prediction."
-    )
+    if not rows:
+        raise ServiceUnavailable(
+            "No engineered live feature vector is stored. The scheduler must fetch recent completed "
+            "5-minute XAU/USD candles using TWELVE_DATA_API_KEY before prediction."
+        )
+    # A failed current refresh is represented by an empty newest row. Do not
+    # silently roll back to an older vector even if it is inside the age limit.
+    row = rows[0]
+    stored = row.feature_vector or {}
+    if not stored.get("_source_timestamp") or stored.get("_source_price") is None:
+        raise ServiceUnavailable(
+            "The latest market refresh did not produce a complete feature snapshot; refusing prediction."
+        )
+    try:
+        timestamp = pd.to_datetime(stored["_source_timestamp"], utc=True, errors="raise").to_pydatetime()
+        features = {key: value for key, value in stored.items() if not key.startswith("_")}
+        return features, float(stored["_source_price"]), timestamp
+    except (TypeError, ValueError) as exc:
+        raise ServiceUnavailable("The latest live feature snapshot is malformed; refusing prediction.") from exc
 
 def _prepare_feature_frame(features: dict[str, Any], model: Any, feature_names: list[str] | None) -> pd.DataFrame:
     if feature_names is None:

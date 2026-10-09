@@ -206,6 +206,7 @@ class LiveFeaturePipelineTests(unittest.TestCase):
 
     def test_twelve_data_bars_flow_through_features_and_model_and_market_change_changes_output(self):
         import numpy as np
+        from sklearn.base import BaseEstimator, ClassifierMixin
         from sklearn.impute import SimpleImputer
         from sklearn.pipeline import Pipeline
         from sklearn.preprocessing import StandardScaler
@@ -216,9 +217,11 @@ class LiveFeaturePipelineTests(unittest.TestCase):
             def __init__(self, payload): self.payload = payload
             def raise_for_status(self): pass
             def json(self): return self.payload
-        class DirectionClassifier:
-            classes_ = np.array([0, 1, 2])
-            def fit(self, values, labels=None): return self
+        class DirectionClassifier(ClassifierMixin, BaseEstimator):
+            def fit(self, values, labels):
+                self.classes_ = np.unique(labels)
+                self.is_fitted_ = True
+                return self
             def predict_proba(self, values):
                 return np.array([[0.90, 0.05, 0.05] if row[0] < 0 else [0.05, 0.05, 0.90] for row in values])
 
@@ -249,7 +252,7 @@ class LiveFeaturePipelineTests(unittest.TestCase):
                 ("imputer", SimpleImputer(strategy="median")),
                 ("scaler", StandardScaler()),
                 ("classifier", DirectionClassifier()),
-            ]).fit(np.array([[-2.0], [2.0]]), np.array([0, 2]))
+            ]).fit(np.array([[-2.0], [0.0], [2.0]]), np.array([0, 1, 2]))
             model.gold_feature_columns_ = ordered_names
             model.gold_trained_class_ids_ = [0, 1, 2]
             vector = {
