@@ -23,8 +23,8 @@ class DukascopyDecoderTests(unittest.TestCase):
     def test_midpoint_and_resample_skip_sparse_buckets(self):
         timestamps = pd.date_range("2026-01-02T00:00:00Z", periods=7, freq="min")
         bid = pd.DataFrame({
-            "timestamp": timestamps, "open": [100.0] * 8, "high": [101.0] * 8,
-            "low": [99.0] * 8, "close": [100.5] * 8, "volume": [4.0] * 8,
+            "timestamp": timestamps, "open": [100.0] * 7, "high": [101.0] * 7,
+            "low": [99.0] * 7, "close": [100.5] * 7, "volume": [4.0] * 7,
         })
         ask = bid.assign(open=102.0, high=103.0, low=101.0, close=102.5, volume=6.0)
         minute = midpoint_bars(bid, ask)
