@@ -6,15 +6,16 @@ This repository stores `backend/`, `frontend/`, `step3/`, and `render.yaml` at i
 
 Before enabling `/predict` or the four-hour scheduler, train the model and make
 the saved artifact available at
-`step3/artifacts/xgb/xgboost_pipeline.joblib` (configured in Render as `../step3/artifacts/xgb/xgboost_pipeline.joblib`, relative to `backend/`). Set
-`FEATURES_CSV_PATH` to a regularly refreshed engineered feature CSV path
-relative to `backend/`, or persist the current feature vector in
-`price_history.feature_vector`. Keep the model and feature columns in sync.
+`step3/artifacts/xgb/xgboost_pipeline.joblib` (configured in Render as `../step3/artifacts/xgb/xgboost_pipeline.joblib`, relative to `backend/`). Set `TWELVE_DATA_API_KEY` on both the API and scheduler services. The
+scheduler fetches completed 5-minute XAU/USD candles and runs the same
+`step3/feature_engineering.py` builder used by training, then stores the
+engineered row in `price_history.feature_vector` with the source candle time
+and close. Keep the model artifact and trained feature columns in sync.
 
 The API can start without model/feature files, but prediction requests return
 HTTP 503 until those files/data are present. Predictions also fail closed when
 engineered features are older than `FEATURE_MAX_AGE_SECONDS` (default 900 seconds).
-Supply fresh 5-minute OHLCV feature vectors; flat minute quotes are not a substitute.
+The provider must return at least 50 completed bars. Flat minute quote rows are not used as model OHLCV input, and historical feature CSV files are not an inference fallback. Volume fields that the provider omits remain missing; the model pipeline imputes them.
 
 ## 2. Deploy the API and scheduler on Render
 
@@ -27,7 +28,7 @@ Supply fresh 5-minute OHLCV feature vectors; flat minute quotes are not a substi
    declares `1c-2g` compute for the Python services and `0.5c-1g` for Postgres;
    change plans in the YAML if you prefer different capacity.
 4. Enter `GOLD_API_KEY`, `TWELVE_DATA_API_KEY`, `FRED_API_KEY`, `LLM_API_KEY`,
-   `SEARCH_API_KEY`, and `FEATURES_CSV_PATH` when prompted. For the initial
+   `SEARCH_API_KEY`, when prompted. For the initial
    `FRONTEND_URL` prompt, use `http://localhost:5173` temporarily or the
    production origin if you already know it; replace it with the Vercel origin
    after the frontend deploy in step 4 below. Do not put secret values in YAML
