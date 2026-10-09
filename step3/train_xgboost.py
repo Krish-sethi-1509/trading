@@ -136,9 +136,12 @@ def train(
         and pd.api.types.is_numeric_dtype(labeled[column])
     ]
     features = labeled[candidates].replace([np.inf, -np.inf], np.nan)
-    # Remove features with no observed values in the full historical sample;
-    # all remaining imputation/scaling is learned inside the training pipeline.
-    feature_columns = features.columns[features.notna().any()].tolist()
+    # Select features using only the pre-test training window; learned imputation
+    # and scaling are then fit inside each model pipeline.
+    initial_train_end = int(len(labeled) * (1.0 - test_size))
+    feature_columns = features.iloc[:initial_train_end].columns[
+        features.iloc[:initial_train_end].notna().any()
+    ].tolist()
     features = features[feature_columns]
     if not feature_columns:
         raise ValueError("No numeric feature columns found in the input")
