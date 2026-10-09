@@ -45,7 +45,8 @@ jobs:
           python step3/download_historical_xauusd.py \
             --start-date "${{ steps.window.outputs.start }}" \
             --end-date "${{ steps.window.outputs.end }}" \
-            --output "$RUNNER_TEMP/xauusd_5m.csv"
+            --output "$RUNNER_TEMP/xauusd_5m.csv" \
+            --workers 12
       - name: Engineer features and evaluate models
         run: |
           python step3/feature_engineering.py \
