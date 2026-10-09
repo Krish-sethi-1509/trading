@@ -1,7 +1,7 @@
 {
-  "evaluation_run": "https://github.com/Krish-sethi-1509/trading/actions/runs/37946775631",
+  "evaluation_run": "https://github.com/Krish-sethi-1509/trading/actions/runs/37947069029",
   "source_branch": "fix/live-prediction-evaluation",
-  "source_commit": "74383f3e8fcac17820b5939ab66c8a4d1d95ae8f",
+  "source_commit": "0a3d4127e31afce2b81c6e733b0a21ffcc0f6b0e",
   "dataset": "step3/data/xauusd_5m.csv with step3/data/tips.csv",
   "raw_bars": 5000,
   "holdout": {
