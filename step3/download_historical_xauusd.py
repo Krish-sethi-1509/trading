@@ -8,6 +8,7 @@ when interpreting volume-dependent features.
 from __future__ import annotations
 
 import argparse
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 import lzma
@@ -102,8 +103,75 @@ def resample_five_minutes(minutes: pd.DataFrame, minimum_minutes: int = 3) -> pd
     return aggregation.drop(columns="minute_count").reset_index()
 
 
+def validate_history_coverage(
+    bars: pd.DataFrame,
+    start: date,
+    end: date,
+    *,
+    min_bars_per_day: int = 200,
+    min_total_bar_coverage: float = 0.90,
+) -> dict[str, object]:
+    """Fail closed unless requested weekdays and expected intraday bars are present."""
+    if end < start:
+        raise ValueError("end date must be on or after start date")
+    if bars.empty or "timestamp" not in bars:
+        raise RuntimeError("Historical download returned no timestamped 5-minute bars")
+    timestamps = pd.to_datetime(bars["timestamp"], utc=True, errors="raise")
+    first_timestamp, last_timestamp = timestamps.min(), timestamps.max()
+    expected_days = [
+        start + timedelta(days=offset)
+        for offset in range((end - start).days + 1)
+        if (start + timedelta(days=offset)).weekday() < 5
+    ]
+    day_counts = timestamps.dt.date.value_counts()
+    missing_days = [
+        day.isoformat() for day in expected_days
+        if int(day_counts.get(day, 0)) < min_bars_per_day
+    ]
+    # Dukascopy XAU/USD normally publishes about 23 hours per weekday after
+    # the daily maintenance break: 276 five-minute bars.
+    expected_bars = len(expected_days) * 276
+    bar_coverage = len(bars) / expected_bars if expected_bars else 0.0
+    first_expected = expected_days[0] if expected_days else start
+    last_expected = expected_days[-1] if expected_days else end
+    first_day, last_day = first_timestamp.date(), last_timestamp.date()
+    endpoints_ok = (
+        start <= first_day <= first_expected
+        and last_expected <= last_day <= end
+    )
+    report = {
+        "requested_start": start.isoformat(),
+        "requested_end": end.isoformat(),
+        "actual_first_timestamp": first_timestamp.isoformat(),
+        "actual_last_timestamp": last_timestamp.isoformat(),
+        "expected_weekdays": len(expected_days),
+        "minimum_bars_per_day": min_bars_per_day,
+        "missing_or_short_weekdays": missing_days,
+        "actual_5m_bars": int(len(bars)),
+        "expected_5m_bars_at_23h_per_weekday": int(expected_bars),
+        "bar_coverage": float(bar_coverage),
+        "endpoint_coverage_ok": bool(endpoints_ok),
+    }
+    failures = []
+    if missing_days:
+        failures.append(f"{len(missing_days)} weekdays are missing or have fewer than {min_bars_per_day} bars")
+    if bar_coverage < min_total_bar_coverage:
+        failures.append(f"bar coverage {bar_coverage:.1%} is below {min_total_bar_coverage:.1%}")
+    if not endpoints_ok:
+        failures.append(
+            f"actual dates {first_day} through {last_day} do not cover expected endpoints "
+            f"{first_expected} through {last_expected}"
+        )
+    if failures:
+        raise RuntimeError(
+            "Incomplete historical XAU/USD dataset: " + "; ".join(failures)
+            + ". Coverage report: " + json.dumps(report, sort_keys=True)
+        )
+    return report
+
+
 def download_history(start: date, end: date, workers: int = 6) -> pd.DataFrame:
-    """Download both quote sides for inclusive UTC date range and return 5-minute bars."""
+    """Download both quote sides for inclusive UTC date range and return validated 5-minute bars."""
     if end < start:
         raise ValueError("end date must be on or after start date")
     days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
@@ -117,43 +185,31 @@ def download_history(start: date, end: date, workers: int = 6) -> pd.DataFrame:
         daily.append(midpoint_bars(downloaded[(day, "BID")], downloaded[(day, "ASK")]))
     minute_bars = pd.concat(daily, ignore_index=True) if daily else pd.DataFrame()
     result = resample_five_minutes(minute_bars)
-    if len(result) < 1000:
-        raise RuntimeError(f"Only {len(result)} matched 5-minute bars were downloaded; at least 1,000 are required to evaluate")
-    weekdays = {
-        start + timedelta(days=offset)
-        for offset in range((end - start).days + 1)
-        if (start + timedelta(days=offset)).weekday() < 5
-    }
-    observed_dates = set(pd.to_datetime(result["timestamp"], utc=True).dt.date)
-    coverage = len(weekdays & observed_dates) / max(1, len(weekdays))
-    if coverage < 0.75:
-        raise RuntimeError(
-            f"Only {coverage:.1%} of expected weekdays have matched bars; "
-            "the historical download is incomplete, refusing to evaluate"
-        )
-    first_day, last_day = pd.to_datetime(result["timestamp"], utc=True).dt.date.min(), pd.to_datetime(result["timestamp"], utc=True).dt.date.max()
-    if first_day > start + timedelta(days=14) or last_day < end - timedelta(days=14):
-        raise RuntimeError(
-            f"Downloaded date coverage is {first_day} through {last_day}, "
-            "which does not cover the requested history window"
-        )
+    coverage = validate_history_coverage(result, start, end)
+    print("Historical coverage: " + json.dumps(coverage, sort_keys=True))
     return result
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--start-date", required=True, type=date.fromisoformat)
     parser.add_argument("--end-date", required=True, type=date.fromisoformat)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--coverage-report", help="Optional path for requested-vs-actual coverage JSON")
     parser.add_argument("--workers", type=int, default=6)
     parser.add_argument("--omit-volume", action="store_true", help="Write volume as missing to match live feeds without volume")
     args = parser.parse_args()
     if args.workers < 1 or args.workers > 16:
         parser.error("--workers must be between 1 and 16")
     bars = download_history(args.start_date, args.end_date, args.workers)
+    coverage = validate_history_coverage(bars, args.start_date, args.end_date)
     if args.omit_volume:
         bars["volume"] = np.nan
     bars.to_csv(args.output, index=False, float_format="%.6f")
+    if args.coverage_report:
+        from pathlib import Path
+        report_path = Path(args.coverage_report)
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(json.dumps(coverage, indent=2) + "\\n", encoding="utf-8")
     print(f"Saved {len(bars):,} five-minute midpoint bars from {bars.timestamp.min()} to {bars.timestamp.max()} to {args.output}")
     print("Source: Dukascopy midpoint bars; volume is a broker-feed activity proxy, not consolidated OTC volume.")
     if args.omit_volume:

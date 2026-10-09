@@ -5,7 +5,7 @@ from datetime import date
 
 import pandas as pd
 
-from step3.download_historical_xauusd import decode_bi5, midpoint_bars, resample_five_minutes
+from step3.download_historical_xauusd import (decode_bi5, midpoint_bars, resample_five_minutes, validate_history_coverage)
 
 
 class DukascopyDecoderTests(unittest.TestCase):
@@ -40,6 +40,37 @@ class DukascopyDecoderTests(unittest.TestCase):
     def test_reject_malformed_record(self):
         with self.assertRaisesRegex(ValueError, "Malformed BI5"):
             decode_bi5(lzma.compress(b"bad", format=lzma.FORMAT_ALONE), date(2026, 1, 2))
+
+    def _complete_three_weekdays(self):
+        chunks = []
+        for day in pd.date_range("2026-01-05", "2026-01-07", freq="D", tz="UTC"):
+            chunks.append(pd.DataFrame({
+                "timestamp": pd.date_range(day, periods=276, freq="5min"),
+                "open": 2000.0, "high": 2001.0, "low": 1999.0,
+                "close": 2000.5, "volume": 1.0,
+            }))
+        return pd.concat(chunks, ignore_index=True)
+
+    def test_coverage_report_proves_requested_dates_and_expected_bars(self):
+        report = validate_history_coverage(
+            self._complete_three_weekdays(), date(2026, 1, 5), date(2026, 1, 7)
+        )
+        self.assertEqual(report["actual_5m_bars"], 828)
+        self.assertEqual(report["missing_or_short_weekdays"], [])
+        self.assertTrue(report["endpoint_coverage_ok"])
+        self.assertEqual(report["bar_coverage"], 1.0)
+
+    def test_coverage_rejects_a_missing_weekday(self):
+        bars = self._complete_three_weekdays()
+        bars = bars[bars["timestamp"].dt.date != date(2026, 1, 6)]
+        with self.assertRaisesRegex(RuntimeError, "2026-01-06"):
+            validate_history_coverage(bars, date(2026, 1, 5), date(2026, 1, 7))
+
+    def test_coverage_rejects_short_history_for_six_month_request(self):
+        with self.assertRaisesRegex(RuntimeError, "do not cover expected endpoints"):
+            validate_history_coverage(
+                self._complete_three_weekdays(), date(2026, 1, 5), date(2026, 6, 30)
+            )
 
 
 if __name__ == "__main__":

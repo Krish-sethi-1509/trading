@@ -179,6 +179,7 @@ def build_features(
     return_window: int = 48,
     macro_window_minutes: int = 30,
     round_number_step: float = 100.0,
+    use_volume: bool = False,
 ) -> pd.DataFrame:
     """Return a chronologically sorted feature frame from gold OHLCV data."""
     required = {"timestamp", *OHLCV}
@@ -192,6 +193,10 @@ def build_features(
         frame[column] = pd.to_numeric(frame[column], errors="raise")
     if (frame["volume"] < 0).any():
         raise ValueError("volume cannot be negative")
+    # Live XAU/USD providers do not expose consolidated OTC volume. Default to
+    # the same missing-volume contract during training and inference.
+    if not use_volume:
+        frame["volume"] = np.nan
     if (frame["close"] <= 0).any():
         raise ValueError("close prices must be positive")
 
@@ -293,6 +298,7 @@ def main() -> int:
     parser.add_argument("--return-window", type=int, default=48)
     parser.add_argument("--macro-window-minutes", type=int, default=30)
     parser.add_argument("--round-number-step", type=float, default=100.0)
+    parser.add_argument("--use-volume", action="store_true", help="Opt into provider-specific volume; incompatible with live mode")
     args = parser.parse_args()
     if min(args.sweep_lookback, args.volume_window, args.return_window) < 2:
         parser.error("lookback windows must be at least 2")
@@ -312,6 +318,7 @@ def main() -> int:
         return_window=args.return_window,
         macro_window_minutes=args.macro_window_minutes,
         round_number_step=args.round_number_step,
+        use_volume=args.use_volume,
     )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

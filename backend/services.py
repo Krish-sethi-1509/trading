@@ -254,6 +254,9 @@ def _load_artifacts() -> tuple[Any, Any | None, list[str] | None]:
             raise ServiceUnavailable("MODEL_FEATURES_PATH must contain a JSON array of feature names")
     else:
         feature_names = getattr(model, "gold_feature_columns_", None)
+    embedded_features = getattr(model, "gold_feature_columns_", None)
+    if embedded_features is not None and feature_names != embedded_features:
+        raise ServiceUnavailable("Model and feature manifest use different feature columns or order")
     _MODEL_CACHE.update(signature=signature, model=model, scaler=scaler, features=feature_names)
     return model, scaler, feature_names
 
@@ -262,7 +265,7 @@ def _latest_feature_vector(session: Session) -> tuple[dict[str, Any], float, dat
     """Return a persisted live feature snapshot; never fall back to historical CSV data."""
     rows = session.scalars(
         select(PriceHistory).where(PriceHistory.symbol == "XAU/USD")
-        .order_by(PriceHistory.timestamp.desc()).limit(100)
+        .order_by(PriceHistory.timestamp.desc()).limit(1)
     ).all()
     for row in rows:
         stored = row.feature_vector or {}
@@ -284,6 +287,11 @@ def _prepare_feature_frame(features: dict[str, Any], model: Any, feature_names: 
         feature_names = list(getattr(model, "feature_names_in_", []))
     if not feature_names:
         raise ServiceUnavailable("Model has no stored feature order; set MODEL_FEATURES_PATH")
+    if len(feature_names) != len(set(feature_names)):
+        raise ServiceUnavailable("Model feature order contains duplicate names")
+    missing = [name for name in feature_names if name not in features]
+    if missing:
+        raise ServiceUnavailable("Live feature schema is missing model inputs: " + ", ".join(missing))
     try:
         # Missing or undefined rolling features stay NaN so the pipeline's
         # fitted imputer can handle warm-up windows and unavailable indicators.
@@ -331,6 +339,9 @@ def create_prediction(session: Session) -> dict[str, Any]:
         direction = direction_by_id.get(class_id)
         if direction:
             probabilities_by_direction[direction] = float(probabilities[position])
+    probability_array = np.asarray(probabilities, dtype=float)
+    if probability_array.shape != (len(model_classes),) or not np.isfinite(probability_array).all() or probability_array.sum() <= 0:
+        raise ServiceUnavailable("Model returned invalid prediction probabilities")
     if not probabilities_by_direction:
         raise ServiceUnavailable("Model classes could not be mapped to DOWN/NEUTRAL/UP")
     direction = max(probabilities_by_direction, key=probabilities_by_direction.get)

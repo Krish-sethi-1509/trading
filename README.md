@@ -40,8 +40,7 @@ it for research conclusions.
 
 A reproducible downloader is available at `step3/download_historical_xauusd.py`.
 It fetches matched Dukascopy BID and ASK 1-minute bars, forms midpoint OHLC,
-and resamples to 5-minute bars. The live-model evaluation omits volume to match
-live inference when volume is unavailable. Dukascopy is one broker feed; its volume is
+and resamples to 5-minute bars. Feature engineering omits provider-specific volume by default so offline training and live inference use the same volume-free feature contract. Use --use-volume only for experiments where that exact volume source is also available at serving time. Dukascopy is one broker feed; its volume is
 only a feed activity proxy, not consolidated OTC gold trading volume. The
 six-month GitHub Actions experiment uses the same feature builder and compares
 purged walk-forward XGBoost and Random Forest with chronological holdout

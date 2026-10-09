@@ -45,6 +45,7 @@ jobs:
             --start-date "${{ steps.window.outputs.start }}" \
             --end-date "${{ steps.window.outputs.end }}" \
             --output "$RUNNER_TEMP/xauusd_5m.csv" \
+            --coverage-report "$RUNNER_TEMP/xauusd_coverage.json" \
             --workers 2 \
             --omit-volume
       - name: Engineer features and evaluate models
@@ -63,6 +64,7 @@ jobs:
           name: xauusd-dukascopy-six-month-evaluation-${{ github.sha }}
           path: |
             ${{ runner.temp }}/xauusd_5m.csv
+            ${{ runner.temp }}/xauusd_coverage.json
             ${{ runner.temp }}/xauusd_evaluation/metrics.json
             ${{ runner.temp }}/xauusd_evaluation/test_predictions.csv
             ${{ runner.temp }}/xauusd_evaluation/classification_report.csv

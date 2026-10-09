@@ -35,7 +35,12 @@ def build_live_feature_snapshot(bars: pd.DataFrame, *, tips: pd.DataFrame | None
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
     for name in ("open", "high", "low", "close", "volume"):
         frame[name] = pd.to_numeric(frame[name], errors="coerce")
-    frame = frame.dropna(subset=["timestamp", "open", "high", "low", "close"])
+    if frame.empty or frame[["timestamp", "open", "high", "low", "close"]].isna().any().any():
+        raise LiveFeatureUnavailable("Twelve Data returned incomplete timestamps or OHLC candles.")
+    if (frame[["open", "high", "low", "close"]] <= 0).any().any():
+        raise LiveFeatureUnavailable("Twelve Data returned non-positive OHLC values.")
+    if (frame["high"] < frame[["open", "low", "close"]].max(axis=1)).any() or (frame["low"] > frame[["open", "high", "close"]].min(axis=1)).any():
+        raise LiveFeatureUnavailable("Twelve Data returned inconsistent OHLC values.")
     frame = frame.sort_values("timestamp").drop_duplicates("timestamp", keep="last")
     frame = frame.loc[frame["timestamp"] + pd.Timedelta(minutes=5) <= pd.Timestamp(current)]
     if frame.empty:
@@ -46,8 +51,11 @@ def build_live_feature_snapshot(bars: pd.DataFrame, *, tips: pd.DataFrame | None
         raise LiveFeatureUnavailable(f"Latest completed 5-minute candle is {max(0, int(age))} seconds old; maximum allowed is {max_age}.")
     if len(frame) < 50:
         raise LiveFeatureUnavailable(f"Need at least 50 completed 5-minute candles to warm up rolling features; got {len(frame)}.")
+    recent_deltas = frame["timestamp"].tail(12).diff().dropna().dt.total_seconds()
+    if len(recent_deltas) < 11 or (recent_deltas > 7 * 60).any() or (recent_deltas < 5 * 60).any():
+        raise LiveFeatureUnavailable("Recent provider candles are incomplete or not on a continuous 5-minute grid.")
     try:
-        engineered = build_features(frame.reset_index(drop=True), tips=tips)
+        engineered = build_features(frame.reset_index(drop=True), tips=tips, use_volume=False)
     except (ValueError, KeyError, TypeError) as exc:
         raise LiveFeatureUnavailable(f"Could not engineer features from the latest live candles: {exc}") from exc
     latest = engineered.iloc[-1]
@@ -110,7 +118,9 @@ def _download_recent_bars() -> pd.DataFrame:
             frame[name] = np.nan
         frame[name] = pd.to_numeric(frame[name], errors="coerce")
     frame["timestamp"] = pd.to_datetime(frame["timestamp"], utc=True, errors="coerce")
-    return frame[["timestamp","open","high","low","close","volume"]].dropna(subset=["timestamp","open","high","low","close"]).sort_values("timestamp").drop_duplicates("timestamp",keep="last").reset_index(drop=True)
+    if frame.empty or frame[["timestamp","open","high","low","close"]].isna().any().any():
+        raise LiveFeatureUnavailable("Twelve Data returned incomplete timestamps or OHLC candles.")
+    return frame[["timestamp","open","high","low","close","volume"]].sort_values("timestamp").drop_duplicates("timestamp",keep="last").reset_index(drop=True)
 
 def fetch_live_feature_snapshot(*, now: datetime | None = None):
     """Fetch bars once every four minutes, then recompute the latest feature row."""
