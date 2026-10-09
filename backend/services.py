@@ -52,6 +52,12 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def _request_json(url: str, *, params: dict | None = None, headers: dict | None = None) -> dict[str, Any]:
     try:
         response = requests.get(url, params=params, headers=headers, timeout=HTTP_TIMEOUT)
@@ -309,6 +315,7 @@ def _prepare_feature_frame(features: dict[str, Any], model: Any, feature_names: 
 def create_prediction(session: Session) -> dict[str, Any]:
     """Run inference, persist a prediction, and return the API response shape."""
     features, reference_price, feature_timestamp = _latest_feature_vector(session)
+    feature_timestamp = _as_utc(feature_timestamp)
     max_age = max(0, int(os.getenv("FEATURE_MAX_AGE_SECONDS", "900")))
     feature_age = (utc_now() - feature_timestamp).total_seconds()
     if feature_age < 0 or feature_age > max_age:
@@ -380,7 +387,7 @@ def update_prediction_outcomes(session: Session) -> None:
         if observed is None:
             continue
         max_delay = max(0, int(os.getenv("OUTCOME_MAX_DELAY_SECONDS", "900")))
-        delay = (observed.timestamp - prediction.target_timestamp).total_seconds()
+        delay = (_as_utc(observed.timestamp) - _as_utc(prediction.target_timestamp)).total_seconds()
         if delay < 0 or delay > max_delay:
             # Leave the record pending instead of scoring against a price hours
             # or days after its target (for example, across a weekend closure).
