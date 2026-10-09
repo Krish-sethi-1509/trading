@@ -20,7 +20,7 @@ _BAR_CACHE_LOCK = threading.Lock()
 class LiveFeatureUnavailable(RuntimeError):
     """Fresh, compatible live bars could not be obtained or engineered."""
 
-def build_live_feature_snapshot(bars: pd.DataFrame, *, now: datetime | None = None, max_age_seconds: int | None = None):
+def build_live_feature_snapshot(bars: pd.DataFrame, *, tips: pd.DataFrame | None = None, now: datetime | None = None, max_age_seconds: int | None = None):
     """Engineer a vector from completed 5-minute bars using the training feature builder."""
     current = now or datetime.now(UTC)
     if current.tzinfo is None:
@@ -47,7 +47,7 @@ def build_live_feature_snapshot(bars: pd.DataFrame, *, now: datetime | None = No
     if len(frame) < 50:
         raise LiveFeatureUnavailable(f"Need at least 50 completed 5-minute candles to warm up rolling features; got {len(frame)}.")
     try:
-        engineered = build_features(frame.reset_index(drop=True))
+        engineered = build_features(frame.reset_index(drop=True), tips=tips)
     except (ValueError, KeyError, TypeError) as exc:
         raise LiveFeatureUnavailable(f"Could not engineer features from the latest live candles: {exc}") from exc
     latest = engineered.iloc[-1]
@@ -59,6 +59,33 @@ def build_live_feature_snapshot(bars: pd.DataFrame, *, now: datetime | None = No
         number = float(value)
         features[str(name)] = number if np.isfinite(number) else None
     return features, float(latest["close"]), last_timestamp
+
+def _download_recent_tips(*, now: datetime | None = None) -> pd.DataFrame:
+    """Fetch published DFII10 observations; feature_engineering applies its one-day release lag."""
+    from io import StringIO
+    current = now or datetime.now(UTC)
+    try:
+        response = requests.get(
+            "https://fred.stlouisfed.org/graph/fredgraph.csv",
+            params={"id": "DFII10"},
+            timeout=float(os.getenv("MARKET_DATA_TIMEOUT_SECONDS", "12")),
+        )
+        response.raise_for_status()
+        raw = pd.read_csv(StringIO(response.text))
+    except (requests.RequestException, pd.errors.ParserError, ValueError) as exc:
+        raise LiveFeatureUnavailable("Could not fetch current FRED DFII10 observations for live features.") from exc
+    date_column = next((name for name in ("observation_date", "DATE") if name in raw), None)
+    value_column = "DFII10" if "DFII10" in raw else None
+    if date_column is None or value_column is None:
+        raise LiveFeatureUnavailable("FRED returned an unexpected DFII10 CSV schema.")
+    tips = raw.rename(columns={date_column: "timestamp", value_column: "tips_yield"})[["timestamp", "tips_yield"]]
+    tips["timestamp"] = pd.to_datetime(tips["timestamp"], utc=True, errors="coerce")
+    tips["tips_yield"] = pd.to_numeric(tips["tips_yield"], errors="coerce")
+    tips = tips.dropna().sort_values("timestamp").drop_duplicates("timestamp", keep="last")
+    if tips.empty or (current.astimezone(UTC) - tips.iloc[-1]["timestamp"].to_pydatetime()).total_seconds() > 5 * 86400:
+        raise LiveFeatureUnavailable("FRED DFII10 observations are missing or older than five days.")
+    return tips.reset_index(drop=True)
+
 
 def _download_recent_bars() -> pd.DataFrame:
     key = os.getenv("TWELVE_DATA_API_KEY", "").strip()
@@ -91,6 +118,6 @@ def fetch_live_feature_snapshot(*, now: datetime | None = None):
     ttl = max(0, int(os.getenv("LIVE_FEATURE_CACHE_SECONDS", "240")))
     with _BAR_CACHE_LOCK:
         if _BAR_CACHE is None or time.monotonic() - _BAR_CACHE[0] > ttl:
-            _BAR_CACHE = (time.monotonic(), _download_recent_bars())
-        bars = _BAR_CACHE[1].copy()
-    return build_live_feature_snapshot(bars, now=now)
+            _BAR_CACHE = (time.monotonic(), _download_recent_bars(), _download_recent_tips(now=now))
+        bars, tips = _BAR_CACHE[1].copy(), _BAR_CACHE[2].copy()
+    return build_live_feature_snapshot(bars, tips=tips, now=now)
