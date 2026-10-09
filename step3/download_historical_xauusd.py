@@ -128,13 +128,18 @@ def main() -> int:
     parser.add_argument("--end-date", required=True, type=date.fromisoformat)
     parser.add_argument("--output", required=True)
     parser.add_argument("--workers", type=int, default=6)
+    parser.add_argument("--omit-volume", action="store_true", help="Write volume as missing to match live feeds without volume")
     args = parser.parse_args()
     if args.workers < 1 or args.workers > 16:
         parser.error("--workers must be between 1 and 16")
     bars = download_history(args.start_date, args.end_date, args.workers)
+    if args.omit_volume:
+        bars["volume"] = np.nan
     bars.to_csv(args.output, index=False, float_format="%.6f")
     print(f"Saved {len(bars):,} five-minute midpoint bars from {bars.timestamp.min()} to {bars.timestamp.max()} to {args.output}")
-    print("Source: Dukascopy; volume is a broker-feed activity proxy, not consolidated OTC volume.")
+    print("Source: Dukascopy midpoint bars; volume is a broker-feed activity proxy, not consolidated OTC volume.")
+    if args.omit_volume:
+        print("Volume omitted to match live inference feeds without volume.")
     return 0
 
 
