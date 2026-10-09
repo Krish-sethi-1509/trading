@@ -46,7 +46,10 @@ def build_live_feature_snapshot(bars: pd.DataFrame, *, now: datetime | None = No
         raise LiveFeatureUnavailable(f"Latest completed 5-minute candle is {max(0, int(age))} seconds old; maximum allowed is {max_age}.")
     if len(frame) < 50:
         raise LiveFeatureUnavailable(f"Need at least 50 completed 5-minute candles to warm up rolling features; got {len(frame)}.")
-    engineered = build_features(frame.reset_index(drop=True))
+    try:
+        engineered = build_features(frame.reset_index(drop=True))
+    except (ValueError, KeyError, TypeError) as exc:
+        raise LiveFeatureUnavailable(f"Could not engineer features from the latest live candles: {exc}") from exc
     latest = engineered.iloc[-1]
     excluded = {"timestamp", "target_timestamp", "future_timestamp", "target_class", "future_close", "future_return"}
     features = {}
