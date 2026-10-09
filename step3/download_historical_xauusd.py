@@ -43,7 +43,7 @@ def decode_bi5(payload: bytes, day: date) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
 
-def fetch_side(day: date, side: str, *, retries: int = 2) -> pd.DataFrame:
+def fetch_side(day: date, side: str, *, retries: int = 4) -> pd.DataFrame:
     """Fetch one UTC day's BID or ASK candles; missing market days return empty."""
     month_index = day.month - 1
     url = (f"{BASE_URL}/XAUUSD/{day.year}/{month_index:02d}/{day.day:02d}/"
@@ -51,7 +51,7 @@ def fetch_side(day: date, side: str, *, retries: int = 2) -> pd.DataFrame:
     request = Request(url, headers={"User-Agent": "xauusd-research/1.0"})
     for attempt in range(retries):
         try:
-            with urlopen(request, timeout=8) as response:
+            with urlopen(request, timeout=12) as response:
                 return decode_bi5(response.read(), day)
         except HTTPError as exc:
             if exc.code == 404:
@@ -119,6 +119,24 @@ def download_history(start: date, end: date, workers: int = 6) -> pd.DataFrame:
     result = resample_five_minutes(minute_bars)
     if len(result) < 1000:
         raise RuntimeError(f"Only {len(result)} matched 5-minute bars were downloaded; at least 1,000 are required to evaluate")
+    weekdays = {
+        start + timedelta(days=offset)
+        for offset in range((end - start).days + 1)
+        if (start + timedelta(days=offset)).weekday() < 5
+    }
+    observed_dates = set(pd.to_datetime(result["timestamp"], utc=True).dt.date)
+    coverage = len(weekdays & observed_dates) / max(1, len(weekdays))
+    if coverage < 0.75:
+        raise RuntimeError(
+            f"Only {coverage:.1%} of expected weekdays have matched bars; "
+            "the historical download is incomplete, refusing to evaluate"
+        )
+    first_day, last_day = pd.to_datetime(result["timestamp"], utc=True).dt.date.min(), pd.to_datetime(result["timestamp"], utc=True).dt.date.max()
+    if first_day > start + timedelta(days=14) or last_day < end - timedelta(days=14):
+        raise RuntimeError(
+            f"Downloaded date coverage is {first_day} through {last_day}, "
+            "which does not cover the requested history window"
+        )
     return result
 
 
