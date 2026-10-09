@@ -42,7 +42,7 @@ def decode_bi5(payload: bytes, day: date) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
 
-def fetch_side(day: date, side: str, *, retries: int = 3) -> pd.DataFrame:
+def fetch_side(day: date, side: str, *, retries: int = 2) -> pd.DataFrame:
     """Fetch one UTC day's BID or ASK candles; missing market days return empty."""
     month_index = day.month - 1
     url = (f"{BASE_URL}/XAUUSD/{day.year}/{month_index:02d}/{day.day:02d}/"
@@ -50,7 +50,7 @@ def fetch_side(day: date, side: str, *, retries: int = 3) -> pd.DataFrame:
     request = Request(url, headers={"User-Agent": "xauusd-research/1.0"})
     for attempt in range(retries):
         try:
-            with urlopen(request, timeout=20) as response:
+            with urlopen(request, timeout=8) as response:
                 return decode_bi5(response.read(), day)
         except HTTPError as exc:
             if exc.code == 404:
@@ -124,8 +124,8 @@ def main() -> int:
     parser.add_argument("--output", required=True)
     parser.add_argument("--workers", type=int, default=6)
     args = parser.parse_args()
-    if args.workers < 1 or args.workers > 12:
-        parser.error("--workers must be between 1 and 12")
+    if args.workers < 1 or args.workers > 16:
+        parser.error("--workers must be between 1 and 16")
     bars = download_history(args.start_date, args.end_date, args.workers)
     bars.to_csv(args.output, index=False, float_format="%.6f")
     print(f"Saved {len(bars):,} five-minute midpoint bars from {bars.timestamp.min()} to {bars.timestamp.max()} to {args.output}")
