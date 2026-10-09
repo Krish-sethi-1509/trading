@@ -200,16 +200,16 @@ def train(
     logistic_predictions = logistic_probabilities.argmax(axis=1)
 
     # Persistence predicts that the most recent horizon-sized move continues.
-    history = labeled[["timestamp", "close"]].copy()
-    history["past_timestamp"] = history["timestamp"] + pd.Timedelta(hours=horizon_hours)
-    history = history.rename(columns={"timestamp": "past_bar_timestamp", "close": "past_close"})
+    history = labeled[["timestamp", "close"]].rename(
+        columns={"timestamp": "past_bar_timestamp", "close": "past_close"}
+    )
     requests = labeled[["timestamp", "close"]].copy()
     requests["lookback_timestamp"] = requests["timestamp"] - pd.Timedelta(hours=horizon_hours)
     persistence = pd.merge_asof(
         requests.sort_values("lookback_timestamp"),
         history.sort_values("past_timestamp"),
         left_on="lookback_timestamp",
-        right_on="past_timestamp",
+        right_on="past_bar_timestamp",
         direction="backward",
         tolerance=pd.Timedelta(minutes=label_tolerance_minutes),
     ).sort_values("timestamp")
