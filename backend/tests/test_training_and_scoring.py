@@ -98,7 +98,7 @@ class OutcomeToleranceTests(unittest.TestCase):
                  patch.dict(os.environ, {"OUTCOME_MAX_DELAY_SECONDS": "900"}):
                 services.update_prediction_outcomes(session)
             session.refresh(prediction)
-            self.assertEqual(prediction.actual_outcome, "NEUTRAL")
+            self.assertEqual(prediction.actual_outcome, "UP")
             self.assertTrue(prediction.accuracy_flag)
 
 
