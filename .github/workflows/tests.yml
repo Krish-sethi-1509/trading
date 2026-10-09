@@ -9,6 +9,9 @@ on:
 jobs:
   backend-and-ml:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: backend
+      DATABASE_URL: postgresql+psycopg://test:test@localhost/test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
