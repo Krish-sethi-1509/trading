@@ -40,7 +40,8 @@ it for research conclusions.
 
 A reproducible downloader is available at `step3/download_historical_xauusd.py`.
 It fetches matched Dukascopy BID and ASK 1-minute bars, forms midpoint OHLC,
-and resamples to 5-minute bars. Dukascopy is one broker feed; its volume is
+and resamples to 5-minute bars. The live-model evaluation omits volume to match
+live inference when volume is unavailable. Dukascopy is one broker feed; its volume is
 only a feed activity proxy, not consolidated OTC gold trading volume. The
 six-month GitHub Actions experiment uses the same feature builder and compares
 purged walk-forward XGBoost and Random Forest with chronological holdout
@@ -51,7 +52,7 @@ To run the historical pipeline locally:
 
 ```sh
 python -m pip install -r step3/requirements.txt
-python step3/download_historical_xauusd.py --start-date 2026-04-01 --end-date 2026-10-06 --output step3/data/xauusd_5m.csv
+python step3/download_historical_xauusd.py --start-date 2026-04-01 --end-date 2026-10-06 --output step3/data/xauusd_5m.csv --omit-volume
 python step3/feature_engineering.py --gold step3/data/xauusd_5m.csv --tips step3/data/tips.csv --output step3/data/features.csv
 python step3/train_xgboost.py --input step3/data/features.csv --output-dir step3/artifacts/xgb
 ```
