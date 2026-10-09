@@ -7,13 +7,13 @@
 **Date:** 29 September 2026  
 **Status:** System and methodology draft; empirical evaluation pending
 
-> **Evidence note.** This draft describes the implementation currently present in the project repository. At the time of writing, no historical feature dataset, fitted model, test predictions, confusion matrix, classification report, or metrics JSON is present. Accordingly, this report makes no quantitative claim about predictive accuracy or superiority. Replace the marked evaluation fields only after running the training pipeline and validating its test design.
+> **Evidence note.** The repository contains a short intraday feature dataset and a fitted model with saved holdout artifacts. The recorded holdout is a legacy run from a short sample and predates the forward-only label, purge, and baseline changes documented here. Its metrics are reported transparently below as diagnostic results, not as evidence of validated predictive performance. Retrain with the corrected pipeline before presenting final results.
 
 ## Abstract
 
 This project develops a full-stack research prototype for classifying the four-hour direction of the XAU/USD spot price as **Up**, **Down**, or **Neutral**. The motivation is that gold prices respond to interacting market and macroeconomic conditions—including real interest rates, the US dollar, trading-session liquidity, and price and volume dynamics—while short-horizon returns are noisy and potentially non-stationary. The proposed system combines intraday gold OHLCV data with lagged US 10-year Treasury Inflation-Protected Securities (TIPS) yield and US Dollar Index (DXY) observations, then derives a set of technical and institutional-mechanics-inspired features. These include London–New York overlap volume-weighted average price (VWAP) bands, rolling liquidity-sweep proxies, a real-yield/spot divergence measure, average true range, candle momentum, fair-value-gap proxies, and optional basis, options open-interest, Commitments of Traders (COT), and macro-release features.
 
-The classification model is an XGBoost multiclass gradient-boosted tree pipeline. Labels are based on the simple return between a bar’s close and a close near four hours later, with a configurable neutral band. A chronological holdout is specified to represent a forward-in-time evaluation. The repository also contains a FastAPI service backed by PostgreSQL, a React dashboard using Lightweight Charts, and a query-time web-grounded macroeconomic chat assistant. Because model artifacts and held-out evaluation outputs are not currently available, the present report documents the model specification and evaluation protocol but does not assert measured predictive performance. The system is positioned as an educational quantitative decision-support prototype, not an automated trading system or a source of personalized financial advice. Its principal research limitations include proxy measurement, incomplete direct market microstructure data, possible temporal leakage around overlapping labels, execution frictions, and regime change.
+The classification model is an XGBoost multiclass gradient-boosted tree pipeline. Labels are based on the simple return between a bar’s close and a close near four hours later, with a configurable neutral band. A chronological holdout is specified to represent a forward-in-time evaluation. The repository also contains a FastAPI service backed by PostgreSQL, a React dashboard with an embedded TradingView chart, and a query-time web-grounded macroeconomic chat assistant. The saved legacy holdout achieved 37.0% accuracy and was heavily biased toward Up predictions; its short sample and unpurged split do not establish forecasting skill. The system is positioned as an educational quantitative decision-support prototype, not an automated trading system or a source of personalized financial advice. Its principal research limitations include proxy measurement, incomplete direct market microstructure data, possible temporal leakage around overlapping labels, execution frictions, and regime change.
 
 **Keywords:** XAU/USD, gold, machine learning, XGBoost, real yields, VWAP, liquidity, decision support, financial time series
 
@@ -94,7 +94,7 @@ The architecture is multi-layered in its feature design, but feature availabilit
 
 The feature-engineering interface accepts timestamped intraday gold OHLCV data and optional timestamped files for TIPS yield, DXY, futures, COT positioning, options strike/open interest, and macro-release times. Timestamps are parsed as UTC, rows are sorted, and duplicate timestamps are reduced to the last record. Daily TIPS and DXY observations are shifted by one day and joined backward to the intraday timeline. The intended primary input is an intraday series because the session-overlap VWAP cannot be meaningfully reconstructed from daily bars.
 
-Before empirical use, the data appendix should report provider, symbol definition, bid/ask or mid-price convention, sampling interval, timezone, missing-data policy, market closures, sample dates, and row counts. It should also distinguish spot from futures prices and describe the origin and meaning of any volume field. No source dataset is currently available in the repository, so these details remain to be supplied from the actual data run.
+Before empirical use, the data appendix should report provider, symbol definition, bid/ask or mid-price convention, sampling interval, timezone, missing-data policy, market closures, sample dates, and row counts. It should also distinguish spot from futures prices and describe the origin and meaning of any volume field. A short sample of XAU/USD 5-minute bars, TIPS observations, engineered features, and model outputs is present. The precise provider plan, quote convention, and volume provenance still need to be recorded from the actual download configuration.
 
 ### 3.2 Feature construction
 
@@ -138,7 +138,7 @@ The target uses the future close near (t+4\) hours and its simple return from th
 R_{t,4h}=\frac{C_{t+4h}}{C_t}-1.
 \]
 
-With the default neutral threshold \(\tau=0.001\), observations are labeled Down if (R_{t,4h}<-\tau), Up if (R_{t,4h}>\tau), and Neutral otherwise. This threshold is 0.10% in absolute return. The implementation aligns to the nearest available bar within a configurable five-minute tolerance. Because nearest-neighbor alignment can select a bar slightly before the nominal target timestamp as well as after it, this should be changed or carefully audited for the final experiment; a strictly forward-only alignment or an explicitly defined bar index is preferable.
+With the default neutral threshold \(\tau=0.001\), observations are labeled Down if (R_{t,4h}<-\tau), Up if (R_{t,4h}>\tau), and Neutral otherwise. This threshold is 0.10% in absolute return. The corrected implementation aligns only to the first available bar at or after the target timestamp, within a configurable five-minute tolerance. This removes the previous possibility of labeling against a pre-target close.
 
 ### 3.4 Model and pipeline
 
@@ -146,7 +146,7 @@ The training script defines a scikit-learn pipeline consisting of median imputat
 
 These values are code defaults, not the result of a reported hyperparameter search. Scaling is included for a consistent preprocessing pipeline, although tree split decisions generally do not require standardized numeric inputs. Hyperparameter selection should be done using only training-period data and a time-ordered validation design. The present script performs a chronological train/test split, but it does not implement a separate validation window, nested temporal tuning, purging, or an embargo for overlapping four-hour labels.
 
-The pipeline removes features with no observed values in the complete labeled sample before the split. This uses information about missingness in the test period, albeit not test target values. For a strict evaluation, feature selection and preprocessing decisions should be learned only within the training folds. Furthermore, the 4-hour labels can overlap heavily when bars are more frequent than four hours; samples around the train/test boundary can therefore share portions of their forward outcome interval. A gap/purge at the split boundary and a walk-forward evaluation are recommended before treating the holdout as a definitive estimate.
+The corrected pipeline selects non-empty features using the training partition and purges training labels whose forward outcome windows reach the test period. It also adds majority-class, four-hour persistence, and regularized logistic-regression baselines, alongside macro-F1, balanced accuracy, log loss, multiclass Brier score, and a ten-bin calibration error. The evaluation remains a single chronological holdout; repeated walk-forward folds and an embargo beyond the label-overlap purge remain necessary before treating it as a stable estimate.
 
 ### 3.5 Evaluation protocol and metrics
 
@@ -156,28 +156,26 @@ The configured protocol holds out the most recent 20% of labeled samples and tra
 
 ### 4.1 Available empirical results
 
-No training artifacts are present in the project workspace as of the report date. Therefore, actual scores cannot be responsibly reported yet.
+The saved legacy artifact contains 4,953 labeled observations: 3,962 training rows and 991 test rows, covering approximately 21 September–8 October 2026. The holdout class support was 478 Down, 187 Neutral, and 326 Up. These values were generated before the forward-only matching and label purge were added; they must not be confused with a rerun of the corrected pipeline.
 
-| Evaluation item | Current status | Required evidence before final submission |
-|---|---|---|
-| Sample period and usable row count | Not available | Data manifest and labeled row counts |
-| Train/test sizes and class balance | Not available | `metrics.json` plus class support in report |
-| Confusion matrix (Down / Neutral / Up) | Not available | `confusion_matrix.csv` from a completed run |
-| Per-class precision, recall, and F1 | Not available | `classification_report.csv` |
-| Overall accuracy and macro-F1 | Not available | Holdout metrics, with exact split dates |
-| Majority-class baseline | Not implemented in training script | Same split evaluated with a training majority classifier |
-| Calibration / probabilistic score | Not available | Reliability assessment and log loss or Brier score |
-| Economic performance after costs | Not evaluated | Separate, pre-specified execution-aware backtest |
+| Legacy holdout metric | Value |
+|---|---:|
+| Accuracy | 37.0% |
+| Macro-F1 | 0.239 |
+| Down precision / recall / F1 | 76.6% / 7.5% / 0.137 |
+| Neutral precision / recall / F1 | 17.6% / 3.2% / 0.054 |
+| Up precision / recall / F1 | 35.7% / 99.7% / 0.526 |
+| Actual / predicted confusion matrix (Down, Neutral, Up) | [[36, 28, 414], [10, 6, 171], [1, 0, 325]] |
 
-The appropriate dissertation statement at this stage is that the model has been specified and the evaluation pipeline has been implemented, while empirical predictive performance remains unverified. The output labels “UP”, “DOWN”, and “NEUTRAL” must not be presented as a validated forecasting capability until the data run, baseline comparison, and leakage review are complete.
+The most frequent test class was Down (478/991 = 48.2%), so an always-Down rule is a useful diagnostic reference but is not a properly fitted training-only majority baseline. The model predicted Up for 910 of 991 observations (91.8%). It therefore underperformed this test-majority reference and showed a severe directional bias. The short sample spans roughly one market regime and cannot support a general claim about future performance. The corrected training script now computes training-derived baselines and calibrated probability metrics; those results are pending a fresh training run. Treat the saved model as a legacy artifact until retraining is completed.
 
 ### 4.2 Confusion matrix interpretation
 
-When available, the matrix should be reported numerically with actual classes as rows and predicted classes as columns. Diagonal cells are correct classifications. Off-diagonal cells expose direction errors—for example, a true Down observation predicted Up—and Neutral-class behavior. Precision for class (k) is (TP_k/(TP_k+FP_k)), while recall is (TP_k/(TP_k+FN_k)). Precision measures the fraction of predictions for a class that were correct; recall measures the fraction of actual class observations recovered. In a three-class setting, both should be reported per class rather than reduced to a single undifferentiated score.
+The legacy matrix is reported above with actual classes as rows and predicted classes as columns. Its off-diagonal counts show that 414 of 478 actual Down cases were predicted Up. Diagonal cells are correct classifications. Off-diagonal cells expose direction errors—for example, a true Down observation predicted Up—and Neutral-class behavior. Precision for class (k) is (TP_k/(TP_k+FP_k)), while recall is (TP_k/(TP_k+FN_k)). Precision measures the fraction of predictions for a class that were correct; recall measures the fraction of actual class observations recovered. In a three-class setting, both should be reported per class rather than reduced to a single undifferentiated score.
 
 ### 4.3 Baseline comparison
 
-The current training script does not compute a baseline. A minimum benchmark is a majority-class classifier fitted on the training partition and evaluated on the identical test dates. A stronger benchmark is a price-only feature model using a small, predeclared set of lagged returns and volatility inputs. Optional additional baselines include regularized multinomial logistic regression and a simple persistence/neutral rule. The proposed multi-layer feature model should be compared on identical observations, labels, split boundaries, and metrics. Only then can any incremental value of macro or liquidity features be evaluated. Feature ablation—price-only, price plus macro, and full available feature set—would help determine whether the added complexity contributes out of sample.
+The corrected training script computes a majority-class baseline from training labels, a four-hour persistence baseline, and regularized multinomial logistic regression on the same purged chronological split. A price-only versus macro-feature ablation remains useful future work. No claim of incremental value is justified until the corrected run and walk-forward evaluation are complete.
 
 ### 4.4 Recommended final reporting table
 
