@@ -4,7 +4,7 @@
 
 **Author:** [Student name]  
 **Programme / Institution:** [Programme and institution]  
-**Date:** 29 September 2026  
+**Date:** 9 October 2026  
 **Status:** System and methodology draft; empirical evaluation pending
 
 > **Evidence note.** The repository contains a short intraday feature dataset and a fitted model with saved holdout artifacts. The recorded holdout is a legacy run from a short sample and predates the forward-only label, purge, and baseline changes documented here. Its metrics are reported transparently below as diagnostic results, not as evidence of validated predictive performance. Retrain with the corrected pipeline before presenting final results.
@@ -144,13 +144,13 @@ With the default neutral threshold \(\tau=0.001\), observations are labeled Down
 
 The training script defines a scikit-learn pipeline consisting of median imputation with missingness indicators, `StandardScaler`, and `XGBClassifier`. The default XGBoost configuration uses `multi:softprob`, multiclass log loss, 500 estimators, maximum depth 5, learning rate 0.03, row subsampling 0.85, column subsampling 0.85, L2 regularization 1.0, random seed 42, all available CPU threads, and histogram tree construction. The pipeline stores the training feature order and class mapping for inference.
 
-These values are code defaults, not the result of a reported hyperparameter search. Scaling is included for a consistent preprocessing pipeline, although tree split decisions generally do not require standardized numeric inputs. Hyperparameter selection should be done using only training-period data and a time-ordered validation design. The present script performs a chronological train/test split, but it does not implement a separate validation window, nested temporal tuning, purging, or an embargo for overlapping four-hour labels.
+These values are code defaults, not the result of a reported hyperparameter search. Scaling is included for a consistent preprocessing pipeline, although tree split decisions generally do not require standardized numeric inputs. Hyperparameter selection should be done using only training-period data and a time-ordered validation design. The corrected script performs a chronological holdout, selects features using only the pre-test training window, and purges training labels whose forward outcome windows reach the test period. It still does not implement repeated walk-forward folds or a separate validation window; those remain required before final dissertation claims.
 
 The corrected pipeline selects non-empty features using the training partition and purges training labels whose forward outcome windows reach the test period. It also adds majority-class, four-hour persistence, and regularized logistic-regression baselines, alongside macro-F1, balanced accuracy, log loss, multiclass Brier score, and a ten-bin calibration error. The evaluation remains a single chronological holdout; repeated walk-forward folds and an embargo beyond the label-overlap purge remain necessary before treating it as a stable estimate.
 
 ### 3.5 Evaluation protocol and metrics
 
-The configured protocol holds out the most recent 20% of labeled samples and trains on the earlier 80%. Confusion-matrix rows correspond to actual classes and columns to predicted classes, ordered Down, Neutral, Up. The training script exports the confusion matrix, per-class precision, recall, F1-score, support, aggregate accuracy, test predictions, and a JSON summary. Accuracy is not sufficient where class frequencies are imbalanced; the final report should include per-class precision/recall/F1, macro-F1, balanced accuracy, class support, and a simple baseline such as majority-class prediction. Given probabilistic outputs, calibration and log loss or Brier score are also useful. A strategy-level backtest would need to incorporate spread, fees, slippage, and a clear position/exit rule, and is outside the current classifier evaluation.
+The corrected protocol holds out the latest 20% chronologically and purges overlap from the earlier training window. Confusion-matrix rows represent actual classes and columns predicted classes, ordered Down, Neutral, Up. The training script exports per-class precision, recall, F1-score, support, macro-F1, balanced accuracy, log loss, multiclass Brier score, ten-bin expected calibration error, and test predictions. It also evaluates training-derived majority, four-hour persistence, and logistic-regression baselines on the same test dates. A strategy-level backtest would need to incorporate spread, fees, slippage, and a clear position/exit rule, and is outside the current classifier evaluation.
 
 ## 4. Model Development and Evaluation
 
