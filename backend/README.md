@@ -8,6 +8,7 @@ process environment. Start PostgreSQL and run:
 
 ```sh
 pip install -r requirements.txt
+alembic -c ../alembic.ini upgrade head
 uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -73,9 +74,9 @@ explanations and prohibit personalized or direct buy/sell/hold instructions.
 
 ## Integration smoke checks
 
-From the workspace directory run `python outputs/ml/test_pipeline.py` after
+From the workspace directory run `python ml/test_pipeline.py` after
 installing the backend requirements and configuring provider keys. It checks
 database connectivity read-only, loads the trained model, exercises feature
 calculations, and verifies API response contracts using an isolated temporary
 database. The deployment checklist is at
-`outputs/ml/DEPLOYMENT_CHECKLIST.md`.
+`ml/DEPLOYMENT_CHECKLIST.md`.
