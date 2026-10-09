@@ -126,6 +126,20 @@ class LiveFeaturePipelineTests(unittest.TestCase):
         self.assertIn("atr_14", features)
         self.assertIn("relative_volume", features)
         self.assertIsNone(features["relative_volume"])
+        self.assertIsNone(features["liquidity_high_sweep"])
+
+
+    def test_live_macro_join_observes_the_one_day_publication_lag(self):
+        import pandas as pd
+        now = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+        tips = pd.DataFrame({
+            "timestamp": [now - timedelta(days=2), now - timedelta(days=1)],
+            "tips_yield": [3.0, 4.0],
+        })
+        features, _, _ = build_live_feature_snapshot(self._bars(now), tips=tips, now=now)
+        # The observation from one day ago is not available until its next-day
+        # availability timestamp; the just-published value is still in the future.
+        self.assertEqual(features["tips_yield"], 3.0)
 
     def test_refuses_stale_live_candles(self):
         now = datetime(2026, 1, 3, 12, tzinfo=timezone.utc)
