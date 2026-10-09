@@ -54,9 +54,14 @@ indicators remain missing for the fitted pipeline to impute. If either feed or
 the resulting features are missing or stale, `/predict` returns HTTP 503. The
 historical feature CSV is never used as a serving fallback.
 
-The checked-in model is still a legacy artifact trained on a short sample.
-Retrain and evaluate it with the corrected trainer before treating predictions
-or accuracy results as meaningful.
+The checked-in serving model is still a legacy artifact. The corrected trainer
+has now been evaluated on the checked-in 5,000-bar sample; XGBoost scored 37.34%
+accuracy and 0.2923 macro-F1, below logistic regression at 38.45% and 0.3212.
+This short sample spans about 17 days and does not establish useful predictive
+skill. The holdout and walk-forward metrics are saved in
+`step3/artifacts/evaluation/metrics.json`; detailed test predictions and the
+per-class report are available in the linked GitHub Actions run artifact. Do
+not treat the old serving model or these short-sample results as validated.
 
 ## Run the API
 
