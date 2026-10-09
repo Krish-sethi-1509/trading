@@ -1,7 +1,7 @@
 {
-  "evaluation_run": "https://github.com/Krish-sethi-1509/trading/actions/runs/37947069029",
+  "evaluation_run": "https://github.com/Krish-sethi-1509/trading/actions/runs/37951422386",
   "source_branch": "fix/live-prediction-evaluation",
-  "source_commit": "0a3d4127e31afce2b81c6e733b0a21ffcc0f6b0e",
+  "source_commit": "a5ba80f998b58337a63742c89208323744b3b8bc",
   "dataset": "step3/data/xauusd_5m.csv with step3/data/tips.csv",
   "raw_bars": 5000,
   "holdout": {
@@ -9,27 +9,28 @@
     "purged_rows": 48,
     "test_rows": 991,
     "feature_count": 26,
-    "accuracy": 0.37336024217961655,
-    "macro_f1": 0.2922789835072624,
-    "balanced_accuracy": 0.34277387242476814,
-    "log_loss": 1.7021369203601986,
-    "multiclass_brier": 0.9197825361412622,
-    "expected_calibration_error_10_bins": 0.35483021231436596,
+    "selected_model": "xgboost",
+    "accuracy": 0.3602421796165489,
+    "macro_f1": 0.2665728273166981,
+    "balanced_accuracy": 0.3308106417670659,
+    "log_loss": 1.7991529954539214,
+    "multiclass_brier": 0.9553667905192128,
+    "expected_calibration_error_10_bins": 0.398966782309795,
     "confusion_matrix_actual_rows_predicted_columns_down_neutral_up": [
       [
-        126,
-        30,
-        322
+        110,
+        24,
+        344
       ],
       [
-        74,
-        8,
-        104
+        64,
+        3,
+        119
       ],
       [
-        87,
-        4,
-        236
+        82,
+        1,
+        244
       ]
     ]
   },
@@ -44,9 +45,9 @@
       "accuracy": 0.384460141271443,
       "macro_f1": 0.32124350143826036,
       "balanced_accuracy": 0.3577214614454223,
-      "log_loss": 1.1167948962633194,
-      "multiclass_brier": 0.6738049307932571,
-      "expected_calibration_error_10_bins": 0.09895632328008866
+      "log_loss": 1.1167948962633183,
+      "multiclass_brier": 0.6738049307932562,
+      "expected_calibration_error_10_bins": 0.09895632328008828
     },
     "persistence": {
       "accuracy": 0.32088799192734613,
@@ -56,42 +57,18 @@
   },
   "walk_forward": {
     "fold_count": 3,
-    "mean_accuracy": 0.41033925686591277,
-    "mean_macro_f1": 0.39502302454595556,
-    "mean_balanced_accuracy": 0.4359924085457358,
-    "mean_log_loss": 1.4708522885105992,
-    "folds": [
-      {
-        "fold": 1,
-        "train_rows": 1190,
-        "purged_rows": 48,
-        "test_rows": 1238,
-        "accuracy": 0.25121163166397414,
-        "macro_f1": 0.24389187823141692,
-        "balanced_accuracy": 0.3435593729861519,
-        "log_loss": 1.6138377951483016
-      },
-      {
-        "fold": 2,
-        "train_rows": 2428,
-        "purged_rows": 48,
-        "test_rows": 1238,
-        "accuracy": 0.5201938610662359,
-        "macro_f1": 0.472900855549029,
-        "balanced_accuracy": 0.490181189125835,
-        "log_loss": 1.2083156098016097
-      },
-      {
-        "fold": 3,
-        "train_rows": 3666,
-        "purged_rows": 48,
-        "test_rows": 1238,
-        "accuracy": 0.4596122778675283,
-        "macro_f1": 0.4682763398574206,
-        "balanced_accuracy": 0.4742366635252204,
-        "log_loss": 1.5904034605818864
-      }
-    ]
+    "xgboost": {
+      "mean_accuracy": 0.483306408185245,
+      "mean_macro_f1": 0.4590734414866682,
+      "mean_balanced_accuracy": 0.4837252618098511,
+      "mean_log_loss": 1.4280102537510333
+    },
+    "random_forest": {
+      "mean_accuracy": 0.3761443187937534,
+      "mean_macro_f1": 0.33982333481795185,
+      "mean_balanced_accuracy": 0.41263124415934543,
+      "mean_log_loss": 1.186688423617827
+    }
   },
   "class_order": [
     "Down",
@@ -99,9 +76,9 @@
     "Up"
   ],
   "notes": [
-    "Short sample spans approximately 17 days; results are diagnostic and do not establish stable forecasting ability.",
-    "XGBoost did not outperform logistic regression on the chronological holdout.",
-    "This CI run evaluated a fresh pipeline but did not replace the legacy serving model artifact.",
-    "Detailed predictions and per-class report are in the linked GitHub Actions artifact."
+    "The checked-in sample spans approximately 17 days and cannot establish stable forecasting ability.",
+    "Walk-forward selection chose XGBoost over Random Forest by mean macro-F1, but XGBoost did not outperform logistic regression on the chronological holdout.",
+    "The serving joblib remains the legacy artifact; this evaluation artifact is diagnostic and was not deployed.",
+    "Detailed predictions and per-class results are in the linked GitHub Actions artifact."
   ]
 }
