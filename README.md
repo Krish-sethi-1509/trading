@@ -53,7 +53,9 @@ Install backend dependencies, set `DATABASE_URL` and provider keys, then from
 ```sh
 pip install -r requirements.txt
 alembic -c ../alembic.ini upgrade head
+# Terminal 1:
 uvicorn main:app --reload --host 127.0.0.1 --port 8000
+# Terminal 2:
 python scheduler.py
 ```
 
