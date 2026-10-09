@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+from sklearn.metrics import (accuracy_score, balanced_accuracy_score, classification_report, confusion_matrix, f1_score, log_loss)
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from xgboost import XGBClassifier
@@ -32,6 +32,9 @@ ID_TO_CLASS = {value: key for key, value in CLASS_TO_ID.items()}
 NON_FEATURE_COLUMNS = {
     "timestamp", "target", "target_class", "future_close", "future_return",
     "label", "label_id", "bar_date", "id",
+    # Exclude non-stationary price levels; relative distances are engineered below.
+    "open", "high", "low", "close", "nearest_round_number", "round_number_distance",
+    "prior_liquidity_high", "prior_liquidity_low",
 }
 
 
@@ -62,7 +65,7 @@ def make_target(
         future.sort_values("future_timestamp"),
         left_on="target_timestamp",
         right_on="future_timestamp",
-        direction="nearest",
+        direction="forward",
         tolerance=tolerance,
     )
     aligned["future_return"] = aligned["future_close"] / aligned["close"] - 1.0
@@ -144,10 +147,16 @@ def train(
     split_at = int(len(labeled) * (1.0 - test_size))
     if split_at <= 0 or split_at >= len(labeled):
         raise ValueError("Chronological split produced an empty train or test set")
-    x_train, x_test = features.iloc[:split_at], features.iloc[split_at:]
-    y_train, y_test = labels.iloc[:split_at], labels.iloc[split_at:]
+    test_start = labeled.iloc[split_at]["timestamp"]
+    # Purge training labels whose forward outcome window reaches the test period.
+    train_mask = labeled.iloc[:split_at]["target_timestamp"] < test_start
+    train_positions = np.flatnonzero(train_mask.to_numpy())
+    if len(train_positions) < 20:
+        raise ValueError("Purging overlapping labels leaves fewer than 20 training rows")
+    x_train, x_test = features.iloc[train_positions], features.iloc[split_at:]
+    y_train, y_test = labels.iloc[train_positions], labels.iloc[split_at:]
     if y_train.nunique() < 2:
-        raise ValueError("Training partition contains fewer than two target classes")
+        raise ValueError("Purged training partition contains fewer than two target classes")
 
     observed_classes = sorted(y_train.unique().tolist())
     encoded_train = y_train.map({class_id: index for index, class_id in enumerate(observed_classes)})
@@ -165,9 +174,62 @@ def train(
         output_dict=True,
         zero_division=0,
     )
+    probabilities = np.zeros((len(x_test), len(CLASS_NAMES)), dtype=float)
+    raw_probabilities = pipeline.predict_proba(x_test)
+    for column_index, class_id in enumerate(observed_classes):
+        probabilities[:, class_id] = raw_probabilities[:, column_index]
+    probabilities = np.clip(probabilities, 1e-15, 1.0)
+    probabilities /= probabilities.sum(axis=1, keepdims=True)
+    majority_class = int(y_train.value_counts().idxmax())
+    majority_predictions = np.full(len(y_test), majority_class, dtype=int)
+
+    from sklearn.linear_model import LogisticRegression
+    logistic = Pipeline([
+        ("imputer", SimpleImputer(strategy="median", add_indicator=True)),
+        ("scaler", StandardScaler()),
+        ("classifier", LogisticRegression(max_iter=1000, class_weight="balanced", random_state=seed)),
+    ])
+    logistic.fit(x_train, y_train)
+    logistic_classes = logistic.named_steps["classifier"].classes_
+    logistic_probabilities = np.zeros((len(x_test), len(CLASS_NAMES)), dtype=float)
+    raw_logistic_probabilities = logistic.predict_proba(x_test)
+    for column_index, class_id in enumerate(logistic_classes):
+        logistic_probabilities[:, int(class_id)] = raw_logistic_probabilities[:, column_index]
+    logistic_probabilities = np.clip(logistic_probabilities, 1e-15, 1.0)
+    logistic_probabilities /= logistic_probabilities.sum(axis=1, keepdims=True)
+    logistic_predictions = logistic_probabilities.argmax(axis=1)
+
+    def summarize(y_true, y_pred, probs=None):
+        result = {
+            "accuracy": float(accuracy_score(y_true, y_pred)),
+            "macro_f1": float(f1_score(y_true, y_pred, labels=[0, 1, 2], average="macro", zero_division=0)),
+            "balanced_accuracy": float(balanced_accuracy_score(y_true, y_pred)),
+        }
+        if probs is not None:
+            one_hot = np.eye(len(CLASS_NAMES))[np.asarray(y_true, dtype=int)]
+            confidence = probs.max(axis=1)
+            correct = (np.asarray(y_pred) == np.asarray(y_true)).astype(float)
+            ece = 0.0
+            for lower in np.linspace(0.0, 0.9, 10):
+                upper = lower + 0.1
+                mask = (confidence >= lower) & (confidence < upper if upper < 1.0 else confidence <= upper)
+                if mask.any():
+                    ece += float(mask.mean() * abs(correct[mask].mean() - confidence[mask].mean()))
+            result.update({
+                "log_loss": float(log_loss(y_true, probs, labels=[0, 1, 2])),
+                "multiclass_brier": float(np.mean(np.sum((probs - one_hot) ** 2, axis=1))),
+                "expected_calibration_error_10_bins": ece,
+            })
+        return result
+
     metrics = {
-        "accuracy": float(accuracy_score(y_test, predicted)),
+        **summarize(y_test, predicted, probabilities),
+        "baselines": {
+            "majority_class": {"class": ID_TO_CLASS[majority_class], **summarize(y_test, majority_predictions)},
+            "logistic_regression": summarize(y_test, logistic_predictions, logistic_probabilities),
+        },
         "train_rows": int(len(x_train)),
+        "purged_rows": int(split_at - len(train_positions)),
         "test_rows": int(len(x_test)),
         "feature_count": int(len(feature_columns)),
     }
@@ -178,6 +240,8 @@ def train(
     results = labeled.iloc[split_at:][["timestamp", "close", "future_close", "future_return", "target_class"]].copy()
     results["predicted_class"] = [ID_TO_CLASS[int(value)] for value in predicted]
     results["predicted_class_id"] = predicted
+    results["majority_baseline_class"] = [ID_TO_CLASS[value] for value in majority_predictions]
+    results["logistic_regression_class"] = [ID_TO_CLASS[value] for value in logistic_predictions]
     results.index = range(len(results))
     details = pd.DataFrame(report).transpose()
     return pipeline, results, details, matrix, metrics
