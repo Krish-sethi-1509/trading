@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "backend"))
-sys.path.insert(0, str(ROOT / "step3"))
+sys.path.append(str(ROOT / "step3"))
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
 from train_xgboost import make_target  # noqa: E402
