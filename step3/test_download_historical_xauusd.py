@@ -21,7 +21,7 @@ class DukascopyDecoderTests(unittest.TestCase):
         self.assertAlmostEqual(decoded.loc[0, "volume"], 12.5)
 
     def test_midpoint_and_resample_skip_sparse_buckets(self):
-        timestamps = pd.date_range("2026-01-02T00:00:00Z", periods=8, freq="min")
+        timestamps = pd.date_range("2026-01-02T00:00:00Z", periods=7, freq="min")
         bid = pd.DataFrame({
             "timestamp": timestamps, "open": [100.0] * 8, "high": [101.0] * 8,
             "low": [99.0] * 8, "close": [100.5] * 8, "volume": [4.0] * 8,
