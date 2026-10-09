@@ -55,13 +55,16 @@ the resulting features are missing or stale, `/predict` returns HTTP 503. The
 historical feature CSV is never used as a serving fallback.
 
 The checked-in serving model is still a legacy artifact. The corrected trainer
-has now been evaluated on the checked-in 5,000-bar sample; XGBoost scored 37.34%
-accuracy and 0.2923 macro-F1, below logistic regression at 38.45% and 0.3212.
-This short sample spans about 17 days and does not establish useful predictive
-skill. The holdout and walk-forward metrics are saved in
-`step3/artifacts/evaluation/metrics.json`; detailed test predictions and the
-per-class report are available in the linked GitHub Actions run artifact. Do
-not treat the old serving model or these short-sample results as validated.
+was evaluated on the checked-in 5,000-bar sample and compared XGBoost with
+Random Forest in purged expanding windows. XGBoost was selected by walk-forward
+macro-F1, but on the final holdout it scored 36.02% accuracy and 0.2666
+macro-F1, below logistic regression at 38.45% and 0.3212. This sample spans
+about 17 days and does not establish useful predictive skill. The holdout and
+walk-forward metrics are saved in `step3/artifacts/evaluation/metrics.json`;
+detailed test predictions and the per-class report are available in the
+[GitHub Actions run 90 artifact](https://github.com/Krish-sethi-1509/trading/actions/runs/37951422386).
+The old serving model has not been replaced; do not treat these short-sample
+results as validated.
 
 ## Run the API
 
