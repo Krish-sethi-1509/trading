@@ -199,6 +199,29 @@ def train(
     logistic_probabilities /= logistic_probabilities.sum(axis=1, keepdims=True)
     logistic_predictions = logistic_probabilities.argmax(axis=1)
 
+    # Persistence predicts that the most recent horizon-sized move continues.
+    history = labeled[["timestamp", "close"]].copy()
+    history["past_timestamp"] = history["timestamp"] + pd.Timedelta(hours=horizon_hours)
+    history = history.rename(columns={"timestamp": "past_bar_timestamp", "close": "past_close"})
+    requests = labeled[["timestamp", "close"]].copy()
+    requests["lookback_timestamp"] = requests["timestamp"] - pd.Timedelta(hours=horizon_hours)
+    persistence = pd.merge_asof(
+        requests.sort_values("lookback_timestamp"),
+        history.sort_values("past_timestamp"),
+        left_on="lookback_timestamp",
+        right_on="past_timestamp",
+        direction="backward",
+        tolerance=pd.Timedelta(minutes=label_tolerance_minutes),
+    ).sort_values("timestamp_x")
+    persistence_return = persistence["close_x"] / persistence["past_close"] - 1.0
+    persistence_class = np.select(
+        [persistence_return < -neutral_threshold, persistence_return > neutral_threshold],
+        [0, 2],
+        default=1,
+    ).astype(int)
+    persistence_predictions = persistence_class[split_at:]
+    persistence_predictions[persistence["past_close"].iloc[split_at:].isna().to_numpy()] = majority_class
+
     def summarize(y_true, y_pred, probs=None):
         result = {
             "accuracy": float(accuracy_score(y_true, y_pred)),
@@ -227,6 +250,7 @@ def train(
         "baselines": {
             "majority_class": {"class": ID_TO_CLASS[majority_class], **summarize(y_test, majority_predictions)},
             "logistic_regression": summarize(y_test, logistic_predictions, logistic_probabilities),
+            "persistence": summarize(y_test, persistence_predictions),
         },
         "train_rows": int(len(x_train)),
         "purged_rows": int(split_at - len(train_positions)),
@@ -242,6 +266,7 @@ def train(
     results["predicted_class_id"] = predicted
     results["majority_baseline_class"] = [ID_TO_CLASS[value] for value in majority_predictions]
     results["logistic_regression_class"] = [ID_TO_CLASS[value] for value in logistic_predictions]
+    results["persistence_class"] = [ID_TO_CLASS[value] for value in persistence_predictions]
     results.index = range(len(results))
     details = pd.DataFrame(report).transpose()
     return pipeline, results, details, matrix, metrics
