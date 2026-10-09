@@ -5,7 +5,7 @@
 **Author:** [Student name]  
 **Programme / Institution:** [Programme and institution]  
 **Date:** 9 October 2026  
-**Status:** System and methodology draft; empirical evaluation pending
+**Status:** System and methodology draft; corrected short-sample evaluation completed, multi-regime evaluation pending
 
 > **Evidence note.** The repository contains a short intraday feature dataset and a fitted model with saved holdout artifacts. The recorded holdout is a legacy run from a short sample and predates the forward-only label, purge, and baseline changes documented here. Its metrics are reported transparently below as diagnostic results, not as evidence of validated predictive performance. Retrain with the corrected pipeline before presenting final results.
 
@@ -167,7 +167,7 @@ The saved legacy artifact contains 4,953 labeled observations: 3,962 training ro
 | Up precision / recall / F1 | 35.7% / 99.7% / 0.526 |
 | Actual / predicted confusion matrix (Down, Neutral, Up) | [[36, 28, 414], [10, 6, 171], [1, 0, 325]] |
 
-The most frequent test class was Down (478/991 = 48.2%), so an always-Down rule is a useful diagnostic reference but is not a properly fitted training-only majority baseline. The model predicted Up for 910 of 991 observations (91.8%). It therefore underperformed this test-majority reference and showed a severe directional bias. The short sample spans roughly one market regime and cannot support a general claim about future performance. The corrected training script now computes training-derived baselines, calibrated probability metrics, and expanding-window fold results; those results are pending a fresh training run. Treat the saved model as a legacy artifact until retraining is completed.
+The most frequent test class was Down (478/991 = 48.2%), so an always-Down rule is a useful diagnostic reference but is not a properly fitted training-only majority baseline. The model predicted Up for 910 of 991 observations (91.8%). It therefore underperformed this test-majority reference and showed a severe directional bias. The short sample spans roughly one market regime and cannot support a general claim about future performance. A corrected run was completed in GitHub Actions on the checked-in 5,000-bar sample; its metrics and confusion matrix are summarized below, and the run retains detailed outputs as an Actions artifact. The corrected XGBoost result still does not beat logistic regression on the holdout, and all scores remain preliminary because the sample covers only about 17 days. The checked-in serving `.joblib` remains the legacy artifact and was not replaced by the CI experiment.
 
 ### 4.2 Confusion matrix interpretation
 
@@ -175,17 +175,20 @@ The legacy matrix is reported above with actual classes as rows and predicted cl
 
 ### 4.3 Baseline comparison
 
-The corrected training script computes a majority-class baseline from training labels, a four-hour persistence baseline, and regularized multinomial logistic regression on the same purged chronological split. A price-only versus macro-feature ablation remains useful future work. No claim of incremental value is justified until the corrected run and walk-forward evaluation are complete.
+On the same 991-row holdout, the corrected XGBoost model achieved 37.34% accuracy, 0.2923 macro-F1, and 0.3428 balanced accuracy. Logistic regression scored 38.45%, 0.3212, and 0.3577, respectively, and had substantially lower log loss (1.1168 versus 1.7021). Persistence scored 32.09% accuracy and 0.2867 macro-F1. The training-derived majority baseline predicted Neutral and scored 18.77% accuracy. Thus, XGBoost did not beat logistic regression on this holdout; its small advantage over persistence on accuracy did not extend to macro-F1. Probability calibration was poor (ECE 0.3548; multiclass Brier 0.9198).
 
-### 4.4 Recommended final reporting table
+Three expanding-window folds gave the XGBoost model mean accuracy 0.4103, mean macro-F1 0.3950, mean balanced accuracy 0.4360, and mean log loss 1.4709. Fold scores varied materially, and no fold-wise baseline comparison was implemented. The evidence does not establish dependable forecasting skill. The evaluation and prediction files are retained in [GitHub Actions run 79](https://github.com/Krish-sethi-1509/trading/actions/runs/37946775631).
 
-Populate this table from actual artifacts; do not fill cells by visual estimate.
+### 4.4 Recommended reporting table
 
-| Model | Accuracy | Balanced accuracy | Macro-F1 | Down P/R/F1 | Neutral P/R/F1 | Up P/R/F1 |
-|---|---:|---:|---:|---:|---:|---:|
-| Majority-class baseline | Pending | Pending | Pending | Pending | Pending | Pending |
-| Price-only baseline | Pending | Pending | Pending | Pending | Pending | Pending |
-| Full available feature model | Pending | Pending | Pending | Pending | Pending | Pending |
+| Model | Accuracy | Balanced accuracy | Macro-F1 | Log loss |
+|---|---:|---:|---:|---:|
+| Training-majority (Neutral) | 18.77% | 33.33% | 0.1054 | — |
+| Four-hour persistence | 32.09% | 28.44% | 0.2867 | — |
+| Logistic regression | 38.45% | 35.77% | 0.3212 | 1.1168 |
+| XGBoost | 37.34% | 34.28% | 0.2923 | 1.7021 |
+
+The XGBoost confusion matrix (actual rows, predicted columns; Down, Neutral, Up) was `[[126, 30, 322], [74, 8, 104], [87, 4, 236]]`. The holdout contained 478 Down, 186 Neutral, and 327 Up observations. There is no price-only baseline in the trainer, so it is not reported.
 
 ## 5. System Architecture
 
@@ -193,7 +196,7 @@ Populate this table from actual artifacts; do not fill cells by visual estimate.
 
 The research workflow begins with external market and macroeconomic data. Historical gold OHLCV, TIPS yields, and DXY values are transformed by the feature-engineering module and passed to the model-training script. The fitted preprocessing/model pipeline is serialized as a joblib artifact. Inference uses FastAPI services to load features and the model, return a directional class and confidence, and store prediction records in PostgreSQL. SQLAlchemy models represent price history and prediction logs. APScheduler is configured to refresh live-price data every minute, generate predictions every four hours, and periodically score predictions against later prices.
 
-The current implementation should be understood as an MVP integration, not yet a fully reconciled research-to-production feed. In particular, the historical fetcher and intraday feature pipeline have different data granularity requirements, and the live-price polling path can store quote snapshots rather than exchange-quality OHLCV candles. Chart-history integrity and model-feature parity must be verified before deployment claims are made.
+The serving path fetches completed five-minute XAU/USD candles from Twelve Data and applies the same feature builder used by the training pipeline. It also fetches DFII10 observations from FRED and applies the documented one-day availability lag. Minute quote snapshots remain flat display and outcome observations; they are not used as model OHLCV input. OTC spot volume may be unavailable, in which case volume-dependent features remain missing and are imputed by the fitted pipeline. The separate daily PostgreSQL ingestion is a research-data path and is not the live prediction source. Optional DXY, futures, options, COT, and event-calendar features are not currently supplied at serving time.
 
 ### 5.2 Backend API
 
