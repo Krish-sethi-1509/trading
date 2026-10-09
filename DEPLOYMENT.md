@@ -15,7 +15,12 @@ and close. Keep the model artifact and trained feature columns in sync.
 The API can start without model/feature files, but prediction requests return
 HTTP 503 until those files/data are present. Predictions also fail closed when
 engineered features are older than `FEATURE_MAX_AGE_SECONDS` (default 900 seconds).
-The provider must return at least 50 completed bars. Flat minute quote rows are not used as model OHLCV input, and historical feature CSV files are not an inference fallback. Volume fields that the provider omits remain missing; the model pipeline imputes them.
+Twelve Data must return at least 50 completed bars. The feature service also
+fetches FRED DFII10 observations and applies the training pipeline's one-day
+availability lag; the newest observation must be within five days. Flat minute
+quote rows are not used as model OHLCV input, and historical CSV files are not
+an inference fallback. Volume fields that the provider omits remain missing
+rather than being turned into false sweep signals.
 
 ## 2. Deploy the API and scheduler on Render
 
