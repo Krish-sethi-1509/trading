@@ -13,6 +13,7 @@ from datetime import date, datetime, timedelta, timezone
 import lzma
 import struct
 import time
+import warnings
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -42,7 +43,7 @@ def decode_bi5(payload: bytes, day: date) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
 
-def fetch_side(day: date, side: str, *, retries: int = 2) -> pd.DataFrame:
+def fetch_side(day: date, side: str, *, retries: int = 1) -> pd.DataFrame:
     """Fetch one UTC day's BID or ASK candles; missing market days return empty."""
     month_index = day.month - 1
     url = (f"{BASE_URL}/XAUUSD/{day.year}/{month_index:02d}/{day.day:02d}/"
@@ -55,11 +56,15 @@ def fetch_side(day: date, side: str, *, retries: int = 2) -> pd.DataFrame:
         except HTTPError as exc:
             if exc.code == 404:
                 return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
-            if exc.code not in (429, 500, 502, 503, 504) or attempt + 1 == retries:
+            if exc.code not in (408, 429, 500, 502, 503, 504):
                 raise
-        except (TimeoutError, URLError):
             if attempt + 1 == retries:
-                raise
+                warnings.warn(f"Skipping {side} {day}: HTTP {exc.code}", RuntimeWarning)
+                return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        except (TimeoutError, URLError) as exc:
+            if attempt + 1 == retries:
+                warnings.warn(f"Skipping {side} {day} after network timeout: {exc}", RuntimeWarning)
+                return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
         time.sleep(0.5 * (2 ** attempt))
     return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 
@@ -112,8 +117,8 @@ def download_history(start: date, end: date, workers: int = 6) -> pd.DataFrame:
         daily.append(midpoint_bars(downloaded[(day, "BID")], downloaded[(day, "ASK")]))
     minute_bars = pd.concat(daily, ignore_index=True) if daily else pd.DataFrame()
     result = resample_five_minutes(minute_bars)
-    if result.empty:
-        raise RuntimeError("No matched XAU/USD bars were downloaded; check date range and datafeed availability")
+    if len(result) < 1000:
+        raise RuntimeError(f"Only {len(result)} matched 5-minute bars were downloaded; at least 1,000 are required to evaluate")
     return result
 
 
