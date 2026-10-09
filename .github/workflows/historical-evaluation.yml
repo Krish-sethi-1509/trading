@@ -45,7 +45,7 @@ jobs:
             --start-date "${{ steps.window.outputs.start }}" \
             --end-date "${{ steps.window.outputs.end }}" \
             --output "$RUNNER_TEMP/xauusd_5m.csv" \
-            --workers 3 \
+            --workers 2 \
             --omit-volume
       - name: Engineer features and evaluate models
         run: |
