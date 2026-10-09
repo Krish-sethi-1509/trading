@@ -55,7 +55,16 @@ def _asof_join(
 ) -> pd.DataFrame:
     if path is None:
         return gold
-    external = _load_csv(path, value_columns)
+    if isinstance(path, pd.DataFrame):
+        external = path.copy()
+        if "timestamp" not in external:
+            raise ValueError("In-memory macro frame must contain a timestamp column")
+        external["timestamp"] = _utc_timestamp(external["timestamp"])
+        missing = set(value_columns) - set(external.columns)
+        if missing:
+            raise ValueError(f"In-memory macro frame is missing columns: {', '.join(sorted(missing))}")
+    else:
+        external = _load_csv(path, value_columns)
     external = external[["timestamp", *value_columns]]
     external["timestamp"] = external["timestamp"] + availability_lag
     collisions = (set(external.columns) & set(gold.columns)) - {"timestamp"}
@@ -113,8 +122,10 @@ def _compute_liquidity_sweeps(frame: pd.DataFrame, lookback: int, volume_window:
     high_sweep = frame["high"].gt(prior_high) & frame["close"].lt(prior_high)
     low_sweep = frame["low"].lt(prior_low) & frame["close"].gt(prior_low)
     elevated_volume = frame["relative_volume"].ge(1.5)
-    frame["liquidity_high_sweep"] = (high_sweep & elevated_volume).astype("int8")
-    frame["liquidity_low_sweep"] = (low_sweep & elevated_volume).astype("int8")
+    volume_observed = frame["relative_volume"].notna()
+    # Unknown volume must not be represented as a confirmed absence of a sweep.
+    frame["liquidity_high_sweep"] = np.where(volume_observed, (high_sweep & elevated_volume).astype(float), np.nan)
+    frame["liquidity_low_sweep"] = np.where(volume_observed, (low_sweep & elevated_volume).astype(float), np.nan)
     # A downside break followed by a close back above support on elevated
     # volume is a reproducible bullish ChoCH/reclaim proxy.
     frame["choch_bullish_reclaim"] = frame["liquidity_low_sweep"]
@@ -157,8 +168,8 @@ def _compute_yield_divergence(frame: pd.DataFrame, window: int) -> None:
 def build_features(
     gold: pd.DataFrame,
     *,
-    tips: str | None = None,
-    dxy: str | None = None,
+    tips: str | pd.DataFrame | None = None,
+    dxy: str | pd.DataFrame | None = None,
     futures: str | None = None,
     cot: str | None = None,
     options: str | None = None,
@@ -257,9 +268,9 @@ def build_features(
             valid = (candidates >= 0) & (candidates < len(release_times))
             near_release[valid] |= np.abs(bar_times[valid] - release_times[candidates[valid]]) <= half_window
         frame["macro_release_window"] = near_release.astype("int8")
-        frame["institutional_buying_proxy"] = (
-            near_release & frame["close"].gt(frame["open"]) & frame["relative_volume"].ge(1.5)
-        ).astype("int8")
+        volume_observed = frame["relative_volume"].notna()
+        signal = near_release & frame["close"].gt(frame["open"]) & frame["relative_volume"].ge(1.5)
+        frame["institutional_buying_proxy"] = np.where(volume_observed, signal.astype(float), np.nan)
     else:
         frame["macro_release_window"] = 0
         frame["institutional_buying_proxy"] = 0
