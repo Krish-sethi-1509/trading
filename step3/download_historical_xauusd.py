@@ -43,7 +43,7 @@ def decode_bi5(payload: bytes, day: date) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
 
-def fetch_side(day: date, side: str, *, retries: int = 1) -> pd.DataFrame:
+def fetch_side(day: date, side: str, *, retries: int = 2) -> pd.DataFrame:
     """Fetch one UTC day's BID or ASK candles; missing market days return empty."""
     month_index = day.month - 1
     url = (f"{BASE_URL}/XAUUSD/{day.year}/{month_index:02d}/{day.day:02d}/"
@@ -61,7 +61,7 @@ def fetch_side(day: date, side: str, *, retries: int = 1) -> pd.DataFrame:
             if attempt + 1 == retries:
                 warnings.warn(f"Skipping {side} {day}: HTTP {exc.code}", RuntimeWarning)
                 return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
-        except (TimeoutError, URLError) as exc:
+        except (TimeoutError, URLError, OSError) as exc:
             if attempt + 1 == retries:
                 warnings.warn(f"Skipping {side} {day} after network timeout: {exc}", RuntimeWarning)
                 return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
