@@ -210,7 +210,7 @@ def train(
     requests["lookback_timestamp"] = requests["timestamp"] - pd.Timedelta(hours=horizon_hours)
     persistence = pd.merge_asof(
         requests.sort_values("lookback_timestamp"),
-        history.sort_values("past_timestamp"),
+        history.sort_values("past_bar_timestamp"),
         left_on="lookback_timestamp",
         right_on="past_bar_timestamp",
         direction="backward",
