@@ -75,7 +75,7 @@ Supply fresh 5-minute OHLCV feature vectors; flat minute quotes are not a substi
 
 ## 5. Optional Docker backend
 
-Build with `outputs/` as the Docker context:
+Build with the repository root as the Docker context:
 
 ```sh
 cd .
