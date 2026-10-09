@@ -24,6 +24,7 @@ from sklearn.impute import SimpleImputer
 from sklearn.metrics import (accuracy_score, balanced_accuracy_score, classification_report, confusion_matrix, f1_score, log_loss)
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import TimeSeriesSplit
 from xgboost import XGBClassifier
 
 CLASS_NAMES = ["Down", "Neutral", "Up"]
@@ -105,6 +106,70 @@ def make_pipeline(seed: int, estimators: int, max_depth: int, learning_rate: flo
     )
 
 
+def walk_forward_evaluation(
+    labeled: pd.DataFrame,
+    features: pd.DataFrame,
+    *,
+    seed: int,
+    estimators: int,
+    max_depth: int,
+    learning_rate: float,
+    n_splits: int = 3,
+) -> dict[str, object]:
+    """Evaluate expanding-window folds, purging labels that overlap each test block."""
+    labels = labeled["target_class"].map(CLASS_TO_ID).astype("int64")
+    fold_results: list[dict[str, float | int]] = []
+    splitter = TimeSeriesSplit(n_splits=n_splits)
+    for fold_number, (candidate_train, test_positions) in enumerate(splitter.split(features), start=1):
+        test_start = labeled.iloc[test_positions[0]]["timestamp"]
+        train_labels = labeled.iloc[candidate_train]["target_timestamp"] < test_start
+        train_positions = candidate_train[train_labels.to_numpy()]
+        if len(train_positions) < 20:
+            raise ValueError(f"Walk-forward fold {fold_number} has fewer than 20 purged training rows")
+        fold_columns = features.iloc[train_positions].columns[
+            features.iloc[train_positions].notna().any()
+        ].tolist()
+        if not fold_columns:
+            raise ValueError(f"Walk-forward fold {fold_number} has no observed training features")
+        x_train = features.iloc[train_positions][fold_columns]
+        x_test = features.iloc[test_positions][fold_columns]
+        y_train = labels.iloc[train_positions]
+        y_test = labels.iloc[test_positions]
+        observed = sorted(y_train.unique().tolist())
+        if len(observed) < 2:
+            raise ValueError(f"Walk-forward fold {fold_number} has fewer than two training classes")
+        encoded = y_train.map({class_id: index for index, class_id in enumerate(observed)})
+        pipeline = make_pipeline(seed, estimators, max_depth, learning_rate)
+        pipeline.set_params(xgboost__num_class=len(observed))
+        pipeline.fit(x_train, encoded)
+        encoded_prediction = pipeline.predict(x_test).astype(int)
+        prediction = np.asarray([observed[index] for index in encoded_prediction], dtype=int)
+        probabilities = np.zeros((len(x_test), len(CLASS_NAMES)), dtype=float)
+        raw_probabilities = pipeline.predict_proba(x_test)
+        for column_index, class_id in enumerate(observed):
+            probabilities[:, class_id] = raw_probabilities[:, column_index]
+        probabilities = np.clip(probabilities, 1e-15, 1.0)
+        probabilities /= probabilities.sum(axis=1, keepdims=True)
+        fold_results.append({
+            "fold": fold_number,
+            "train_rows": int(len(train_positions)),
+            "purged_rows": int(len(candidate_train) - len(train_positions)),
+            "test_rows": int(len(test_positions)),
+            "accuracy": float(accuracy_score(y_test, prediction)),
+            "macro_f1": float(f1_score(y_test, prediction, labels=[0, 1, 2], average="macro", zero_division=0)),
+            "balanced_accuracy": float(balanced_accuracy_score(y_test, prediction)),
+            "log_loss": float(log_loss(y_test, probabilities, labels=[0, 1, 2])),
+        })
+    return {
+        "fold_count": len(fold_results),
+        "mean_accuracy": float(np.mean([fold["accuracy"] for fold in fold_results])),
+        "mean_macro_f1": float(np.mean([fold["macro_f1"] for fold in fold_results])),
+        "mean_balanced_accuracy": float(np.mean([fold["balanced_accuracy"] for fold in fold_results])),
+        "mean_log_loss": float(np.mean([fold["log_loss"] for fold in fold_results])),
+        "folds": fold_results,
+    }
+
+
 def train(
     data: pd.DataFrame,
     *,
@@ -136,6 +201,7 @@ def train(
         and pd.api.types.is_numeric_dtype(labeled[column])
     ]
     features = labeled[candidates].replace([np.inf, -np.inf], np.nan)
+    all_features = features.copy()
     # Select features using only the pre-test training window; learned imputation
     # and scaling are then fit inside each model pipeline.
     initial_train_end = int(len(labeled) * (1.0 - test_size))
@@ -260,6 +326,14 @@ def train(
         "test_rows": int(len(x_test)),
         "feature_count": int(len(feature_columns)),
     }
+    metrics["walk_forward"] = walk_forward_evaluation(
+        labeled,
+        all_features,
+        seed=seed,
+        estimators=estimators,
+        max_depth=max_depth,
+        learning_rate=learning_rate,
+    )
     # Metadata used by inference so it applies exactly the same feature order.
     pipeline.gold_feature_columns_ = feature_columns
     pipeline.gold_class_names_ = CLASS_NAMES
