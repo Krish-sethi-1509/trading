@@ -1,5 +1,4 @@
-# Render Blueprint. In Render, select this file as the Blueprint path because
-# it lives under outputs/ in this workspace. Set secret values in the dashboard.
+# Render Blueprint at the repository root. Set secret values in the dashboard.
 databases:
   - name: gold-mvp-db
     plan: 0.5c-1g
@@ -11,7 +10,6 @@ services:
   - type: web
     name: gold-mvp-api
     runtime: python
-    rootDir: outputs
     region: oregon
     plan: 1c-2g
     buildCommand: pip install -r backend/requirements.txt
@@ -42,7 +40,7 @@ services:
       - key: FRONTEND_URL
         sync: false
       - key: MODEL_PATH
-        value: step3/artifacts/xgb/xgboost_pipeline.joblib
+        value: ../step3/artifacts/xgb/xgboost_pipeline.joblib
       - key: FEATURES_CSV_PATH
         sync: false
       - key: PREDICTION_HORIZON_HOURS
@@ -51,12 +49,15 @@ services:
         value: "0.001"
       - key: PRICE_FALLBACK_MAX_STALE_SECONDS
         value: "900"
+      - key: FEATURE_MAX_AGE_SECONDS
+        value: "900"
+      - key: OUTCOME_MAX_DELAY_SECONDS
+        value: "900"
 
   # Scheduler runs separately so multiple web workers don't duplicate jobs.
   - type: worker
     name: gold-mvp-scheduler
     runtime: python
-    rootDir: outputs
     region: oregon
     plan: 1c-2g
     buildCommand: pip install -r backend/requirements.txt
@@ -72,7 +73,7 @@ services:
       - key: TWELVE_DATA_API_KEY
         sync: false
       - key: MODEL_PATH
-        value: step3/artifacts/xgb/xgboost_pipeline.joblib
+        value: ../step3/artifacts/xgb/xgboost_pipeline.joblib
       - key: FEATURES_CSV_PATH
         sync: false
       - key: PREDICTION_HORIZON_HOURS
@@ -80,4 +81,8 @@ services:
       - key: NEUTRAL_RETURN_THRESHOLD
         value: "0.001"
       - key: PRICE_FALLBACK_MAX_STALE_SECONDS
+        value: "900"
+      - key: FEATURE_MAX_AGE_SECONDS
+        value: "900"
+      - key: OUTCOME_MAX_DELAY_SECONDS
         value: "900"
