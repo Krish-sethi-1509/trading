@@ -27,3 +27,23 @@ jobs:
         run: alembic upgrade head
         env:
           DATABASE_URL: sqlite:///ci_migrations.db
+      - name: Train and evaluate on the checked-in historical sample
+        run: |
+          python step3/feature_engineering.py \
+            --gold step3/data/xauusd_5m.csv \
+            --tips step3/data/tips.csv \
+            --output "$RUNNER_TEMP/xauusd_features.csv"
+          python step3/train_xgboost.py \
+            --input "$RUNNER_TEMP/xauusd_features.csv" \
+            --output-dir "$RUNNER_TEMP/xauusd_evaluation"
+          cat "$RUNNER_TEMP/xauusd_evaluation/metrics.json"
+      - name: Save evaluation outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: xauusd-evaluation-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/xauusd_evaluation/metrics.json
+            ${{ runner.temp }}/xauusd_evaluation/test_predictions.csv
+            ${{ runner.temp }}/xauusd_evaluation/classification_report.csv
+            ${{ runner.temp }}/xauusd_evaluation/confusion_matrix.csv
+          if-no-files-found: error
