@@ -35,7 +35,9 @@ NON_FEATURE_COLUMNS = {
     "label", "label_id", "bar_date", "id",
     # Exclude non-stationary price levels; relative distances are engineered below.
     "open", "high", "low", "close", "nearest_round_number", "round_number_distance",
-    "prior_liquidity_high", "prior_liquidity_low",
+    "prior_liquidity_high", "prior_liquidity_low", "volume",
+    "dxy_close", "futures_close", "options_strike", "options_strike_distance",
+    "options_oi", "cot_net_long",
 }
 
 
