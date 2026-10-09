@@ -1,0 +1,107 @@
+{
+  "evaluation_run": "https://github.com/Krish-sethi-1509/trading/actions/runs/37946775631",
+  "source_branch": "fix/live-prediction-evaluation",
+  "source_commit": "74383f3e8fcac17820b5939ab66c8a4d1d95ae8f",
+  "dataset": "step3/data/xauusd_5m.csv with step3/data/tips.csv",
+  "raw_bars": 5000,
+  "holdout": {
+    "train_rows": 3913,
+    "purged_rows": 48,
+    "test_rows": 991,
+    "feature_count": 26,
+    "accuracy": 0.37336024217961655,
+    "macro_f1": 0.2922789835072624,
+    "balanced_accuracy": 0.34277387242476814,
+    "log_loss": 1.7021369203601986,
+    "multiclass_brier": 0.9197825361412622,
+    "expected_calibration_error_10_bins": 0.35483021231436596,
+    "confusion_matrix_actual_rows_predicted_columns_down_neutral_up": [
+      [
+        126,
+        30,
+        322
+      ],
+      [
+        74,
+        8,
+        104
+      ],
+      [
+        87,
+        4,
+        236
+      ]
+    ]
+  },
+  "baselines": {
+    "majority_class": {
+      "class": "Neutral",
+      "accuracy": 0.18768920282542886,
+      "macro_f1": 0.10535259133389974,
+      "balanced_accuracy": 0.3333333333333333
+    },
+    "logistic_regression": {
+      "accuracy": 0.384460141271443,
+      "macro_f1": 0.32124350143826036,
+      "balanced_accuracy": 0.3577214614454223,
+      "log_loss": 1.1167948962633194,
+      "multiclass_brier": 0.6738049307932571,
+      "expected_calibration_error_10_bins": 0.09895632328008866
+    },
+    "persistence": {
+      "accuracy": 0.32088799192734613,
+      "macro_f1": 0.2867334215918521,
+      "balanced_accuracy": 0.28435413908945356
+    }
+  },
+  "walk_forward": {
+    "fold_count": 3,
+    "mean_accuracy": 0.41033925686591277,
+    "mean_macro_f1": 0.39502302454595556,
+    "mean_balanced_accuracy": 0.4359924085457358,
+    "mean_log_loss": 1.4708522885105992,
+    "folds": [
+      {
+        "fold": 1,
+        "train_rows": 1190,
+        "purged_rows": 48,
+        "test_rows": 1238,
+        "accuracy": 0.25121163166397414,
+        "macro_f1": 0.24389187823141692,
+        "balanced_accuracy": 0.3435593729861519,
+        "log_loss": 1.6138377951483016
+      },
+      {
+        "fold": 2,
+        "train_rows": 2428,
+        "purged_rows": 48,
+        "test_rows": 1238,
+        "accuracy": 0.5201938610662359,
+        "macro_f1": 0.472900855549029,
+        "balanced_accuracy": 0.490181189125835,
+        "log_loss": 1.2083156098016097
+      },
+      {
+        "fold": 3,
+        "train_rows": 3666,
+        "purged_rows": 48,
+        "test_rows": 1238,
+        "accuracy": 0.4596122778675283,
+        "macro_f1": 0.4682763398574206,
+        "balanced_accuracy": 0.4742366635252204,
+        "log_loss": 1.5904034605818864
+      }
+    ]
+  },
+  "class_order": [
+    "Down",
+    "Neutral",
+    "Up"
+  ],
+  "notes": [
+    "Short sample spans approximately 17 days; results are diagnostic and do not establish stable forecasting ability.",
+    "XGBoost did not outperform logistic regression on the chronological holdout.",
+    "This CI run evaluated a fresh pipeline but did not replace the legacy serving model artifact.",
+    "Detailed predictions and per-class report are in the linked GitHub Actions artifact."
+  ]
+}
