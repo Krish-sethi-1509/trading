@@ -209,7 +209,7 @@ def main() -> int:
         from pathlib import Path
         report_path = Path(args.coverage_report)
         report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(json.dumps(coverage, indent=2) + "\\n", encoding="utf-8")
+        report_path.write_text(json.dumps(coverage, indent=2), encoding="utf-8")
     print(f"Saved {len(bars):,} five-minute midpoint bars from {bars.timestamp.min()} to {bars.timestamp.max()} to {args.output}")
     print("Source: Dukascopy midpoint bars; volume is a broker-feed activity proxy, not consolidated OTC volume.")
     if args.omit_volume:
