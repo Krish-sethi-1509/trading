@@ -264,9 +264,29 @@ def train(
         pipeline = make_random_forest_pipeline(seed)
         pipeline.fit(x_train, y_train)
         predicted = pipeline.predict(x_test).astype(int)
-        observed_classes = sorted(pipeline.named_steps["classifier"].classes_.tolist())
-        probabilities = np.clip(probabilities, 1e-15, 1.0)
+        observed_classes = [int(value) for value in pipeline.named_steps["classifier"].classes_]
+        probabilities = np.zeros((len(x_test), len(CLASS_NAMES)), dtype=float)
+        raw_probabilities = pipeline.predict_proba(x_test)
+        for column_index, class_id in enumerate(observed_classes):
+            probabilities[:, class_id] = raw_probabilities[:, column_index]
+    else:
+        sample_weights = compute_sample_weight(class_weight="balanced", y=encoded_train)
+        pipeline = make_pipeline(seed, estimators, max_depth, learning_rate)
+        pipeline.set_params(xgboost__num_class=len(observed_classes))
+        pipeline.fit(x_train, encoded_train, xgboost__sample_weight=sample_weights)
+        encoded_predictions = pipeline.predict(x_test).astype(int)
+        predicted = np.asarray([observed_classes[index] for index in encoded_predictions], dtype=int)
+        probabilities = np.zeros((len(x_test), len(CLASS_NAMES)), dtype=float)
+        raw_probabilities = pipeline.predict_proba(x_test)
+        for column_index, class_id in enumerate(observed_classes):
+            probabilities[:, class_id] = raw_probabilities[:, column_index]
+    probabilities = np.clip(probabilities, 1e-15, 1.0)
     probabilities /= probabilities.sum(axis=1, keepdims=True)
+    report = classification_report(
+        y_test, predicted, labels=[0, 1, 2], target_names=CLASS_NAMES,
+        output_dict=True, zero_division=0,
+    )
+    matrix = confusion_matrix(y_test, predicted, labels=[0, 1, 2])
     majority_class = int(y_train.value_counts().idxmax())
     majority_predictions = np.full(len(y_test), majority_class, dtype=int)
 
