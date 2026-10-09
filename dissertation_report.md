@@ -156,18 +156,9 @@ The corrected protocol reports a latest-20% chronological holdout and three expa
 
 ### 4.1 Available empirical results
 
-The saved legacy artifact contains 4,953 labeled observations: 3,962 training rows and 991 test rows, covering approximately 21 September–8 October 2026. The holdout class support was 478 Down, 187 Neutral, and 326 Up. These values were generated before the forward-only matching and label purge were added; they must not be confused with a rerun of the corrected pipeline.
+The checked-in sample contains 5,000 raw five-minute bars spanning approximately 21 September–8 October 2026. The corrected experiment in GitHub Actions run 90 used forward-only four-hour labels, a five-minute target tolerance, and a 48-row purge at temporal boundaries. The chronological holdout contained 991 observations (478 Down, 186 Neutral, 327 Up), with 3,913 training rows and 26 features. Full metrics are recorded in [the evaluation metrics file](step3/artifacts/evaluation/metrics.json); predictions and per-class outputs are retained as the [run 90 Actions artifact](https://github.com/Krish-sethi-1509/trading/actions/runs/37951422386).
 
-| Legacy holdout metric | Value |
-|---|---:|
-| Accuracy | 37.0% |
-| Macro-F1 | 0.239 |
-| Down precision / recall / F1 | 76.6% / 7.5% / 0.137 |
-| Neutral precision / recall / F1 | 17.6% / 3.2% / 0.054 |
-| Up precision / recall / F1 | 35.7% / 99.7% / 0.526 |
-| Actual / predicted confusion matrix (Down, Neutral, Up) | [[36, 28, 414], [10, 6, 171], [1, 0, 325]] |
-
-The most frequent test class was Down (478/991 = 48.2%), so an always-Down rule is a useful diagnostic reference but is not a properly fitted training-only majority baseline. The model predicted Up for 910 of 991 observations (91.8%). It therefore underperformed this test-majority reference and showed a severe directional bias. The short sample spans roughly one market regime and cannot support a general claim about future performance. A corrected run was completed in GitHub Actions on the checked-in 5,000-bar sample; its metrics and confusion matrix are summarized below, and the run retains detailed outputs as an Actions artifact. The corrected XGBoost result still does not beat logistic regression on the holdout, and all scores remain preliminary because the sample covers only about 17 days. The checked-in serving `.joblib` remains the legacy artifact and was not replaced by the CI experiment.
+The model-selection procedure compared class-balanced XGBoost and Random Forest on three identical purged expanding windows and selected XGBoost by mean walk-forward macro-F1. On the final chronological holdout, XGBoost achieved 36.02% accuracy, 0.2666 macro-F1, and 0.3308 balanced accuracy. It did not beat logistic regression, which achieved 38.45% accuracy, 0.3212 macro-F1, and 0.3577 balanced accuracy. Therefore, this result does not support a claim that the selected tree model is more accurate than the simpler baseline. Neither model is established as a dependable forecasting method by this short, single-regime sample. The fitted serving artifact remains the legacy model and was not replaced by this experiment.
 
 ### 4.2 Confusion matrix interpretation
 
@@ -175,9 +166,19 @@ The legacy matrix is reported above with actual classes as rows and predicted cl
 
 ### 4.3 Baseline comparison
 
-On the same 991-row holdout, the corrected XGBoost model achieved 37.34% accuracy, 0.2923 macro-F1, and 0.3428 balanced accuracy. Logistic regression scored 38.45%, 0.3212, and 0.3577, respectively, and had substantially lower log loss (1.1168 versus 1.7021). Persistence scored 32.09% accuracy and 0.2867 macro-F1. The training-derived majority baseline predicted Neutral and scored 18.77% accuracy. Thus, XGBoost did not beat logistic regression on this holdout; its small advantage over persistence on accuracy did not extend to macro-F1. Probability calibration was poor (ECE 0.3548; multiclass Brier 0.9198).
+All methods were evaluated on the same 991 chronological holdout rows. The training-majority class was Neutral; the persistence baseline uses the prior four-hour move; logistic regression is class-weighted and uses the same engineered inputs.
 
-Three expanding-window folds gave the XGBoost model mean accuracy 0.4103, mean macro-F1 0.3950, mean balanced accuracy 0.4360, and mean log loss 1.4709. Fold scores varied materially, and no fold-wise baseline comparison was implemented. The evidence does not establish dependable forecasting skill. The evaluation and prediction files are retained in [GitHub Actions run 79](https://github.com/Krish-sethi-1509/trading/actions/runs/37946775631).
+| Model | Accuracy | Balanced accuracy | Macro-F1 | Log loss |
+|---|---:|---:|---:|---:|
+| Training-majority (Neutral) | 18.77% | 33.33% | 0.1054 | — |
+| Four-hour persistence | 32.09% | 28.44% | 0.2867 | — |
+| Logistic regression | 38.45% | 35.77% | 0.3212 | 1.1168 |
+| Random Forest (walk-forward candidate; not selected) | — | — | — | — |
+| XGBoost (selected by walk-forward macro-F1) | 36.02% | 33.08% | 0.2666 | 1.7992 |
+
+The holdout XGBoost confusion matrix (actual rows, predicted columns; Down, Neutral, Up) was `[[110, 24, 344], [64, 3, 119], [82, 1, 244]]`. It predicted Up too often and achieved an expected calibration error of 0.3990 and multiclass Brier score of 0.9554. Across three expanding folds, XGBoost averaged 48.33% accuracy, 0.4591 macro-F1, 0.4837 balanced accuracy, and 1.4280 log loss. Random Forest averaged 37.61% accuracy, 0.3398 macro-F1, 0.4126 balanced accuracy, and 1.1867 log loss. Fold variation and the short sample limit interpretation. Walk-forward selection scores do not substitute for the later chronological holdout, and the selected XGBoost did not outperform logistic regression there.
+
+The evidence does not establish dependable forecasting skill. Do not present this experiment as a verified improvement in predictive accuracy; more history across market regimes and another untouched evaluation period are needed.
 
 ### 4.4 Recommended reporting table
 
