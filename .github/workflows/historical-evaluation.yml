@@ -1,17 +1,16 @@
 name: historical-evaluation
 
 on:
-  push:
-    branches: ["fix/**"]
-    paths:
-      - "step3/**"
-      - ".github/workflows/historical-evaluation.yml"
   pull_request:
     branches: [main]
     paths:
       - "step3/**"
       - ".github/workflows/historical-evaluation.yml"
   workflow_dispatch:
+
+concurrency:
+  group: historical-evaluation-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -46,7 +45,7 @@ jobs:
             --start-date "${{ steps.window.outputs.start }}" \
             --end-date "${{ steps.window.outputs.end }}" \
             --output "$RUNNER_TEMP/xauusd_5m.csv" \
-            --workers 12
+            --workers 16
       - name: Engineer features and evaluate models
         run: |
           python step3/feature_engineering.py \
