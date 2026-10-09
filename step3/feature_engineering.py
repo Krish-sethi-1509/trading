@@ -207,6 +207,8 @@ def build_features(
     ).max(axis=1)
     frame["atr_14"] = true_range.rolling(14, min_periods=14).mean()
     frame["candlestick_body_atr"] = (frame["close"] - frame["open"]) / frame["atr_14"].replace(0, np.nan)
+    frame["prior_liquidity_high_distance_atr"] = (frame["prior_liquidity_high"] - frame["close"]) / frame["atr_14"].replace(0, np.nan)
+    frame["prior_liquidity_low_distance_atr"] = (frame["close"] - frame["prior_liquidity_low"]) / frame["atr_14"].replace(0, np.nan)
     frame["bullish_momentum"] = (frame["close"].gt(frame["open"]) & frame["candlestick_body_atr"].ge(0.5)).astype("int8")
     frame["bearish_momentum"] = (frame["close"].lt(frame["open"]) & frame["candlestick_body_atr"].le(-0.5)).astype("int8")
     # Three-candle fair value gaps; emitted on the confirming candle.
@@ -232,6 +234,7 @@ def build_features(
     nearest_round = (frame["close"] / round_number_step).round() * round_number_step
     frame["nearest_round_number"] = nearest_round
     frame["round_number_distance"] = nearest_round - frame["close"]
+    frame["round_number_distance_atr"] = frame["round_number_distance"] / frame["atr_14"].replace(0, np.nan)
     frame["price_acceleration"] = frame["close"].pct_change().diff()
     frame["round_number_squeeze_proxy"] = (
         frame["round_number_distance"].abs().le(round_number_step * 0.02)
