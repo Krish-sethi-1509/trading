@@ -38,12 +38,23 @@ it for research conclusions.
 
 ## Live prediction requirements
 
-The minute quote poll stores flat OHLC points without volume and does not
-compute training features. Predictions use a fresh `price_history.feature_vector`
-or a timestamped engineered feature CSV. The API rejects missing timestamps and
-feature rows older than `FEATURE_MAX_AGE_SECONDS` (default 900 seconds). Until
-a licensed intraday OHLCV pipeline supplies fresh feature vectors, `/predict`
-returns HTTP 503 by design.
+The scheduler fetches recent completed 5-minute XAU/USD candles from Twelve
+Data and runs the same `step3/feature_engineering.py` feature builder used by
+training. It stores each vector with the source candle timestamp and close;
+inference uses that close as the prediction reference price. Minute spot quotes
+remain flat display/outcome observations and are never treated as OHLCV bars.
+
+Set `TWELVE_DATA_API_KEY` on both the API and scheduler services. The provider
+must return at least 50 completed candles and the latest candle must be within
+`FEATURE_MAX_AGE_SECONDS` (default 900 seconds). The code does not fabricate
+volume: when the provider omits it, volume-based indicators remain missing and
+are imputed by the fitted model pipeline. If live candles or features are
+missing or stale, `/predict` returns HTTP 503. The historical feature CSV is
+never used as a serving fallback.
+
+The checked-in model is still a legacy artifact trained on a short sample.
+Retrain and evaluate it with the corrected trainer before treating predictions
+or accuracy results as meaningful.
 
 ## Run the API
 
