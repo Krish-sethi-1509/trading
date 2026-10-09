@@ -16,8 +16,8 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from database import engine, get_db
-from models import Base, PredictionLog, PriceHistory
+from database import get_db
+from models import PredictionLog, PriceHistory
 from services import (
     ServiceUnavailable,
     active_session,
@@ -57,9 +57,7 @@ class ChatRequest(BaseModel):
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # For a dissertation MVP this creates tables on first start. Existing
-    # deployments should use Alembic migrations for schema changes.
-    Base.metadata.create_all(bind=engine)
+    # Schema changes are applied by Alembic before the API process starts.
     yield
 
 
