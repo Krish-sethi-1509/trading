@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import os
 from logging.config import fileConfig
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from alembic import context
 from sqlalchemy import create_engine, pool
