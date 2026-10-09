@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -15,6 +16,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
 from train_xgboost import make_target  # noqa: E402
 import services  # noqa: E402
+from live_features import LiveFeatureUnavailable, build_live_feature_snapshot  # noqa: E402
 from models import Base, PredictionLog, PriceHistory  # noqa: E402
 
 
@@ -100,6 +102,69 @@ class OutcomeToleranceTests(unittest.TestCase):
             session.refresh(prediction)
             self.assertEqual(prediction.actual_outcome, "UP")
             self.assertTrue(prediction.accuracy_flag)
+
+
+
+class LiveFeaturePipelineTests(unittest.TestCase):
+    def _bars(self, now):
+        import pandas as pd
+        bars = []
+        for index in range(80):
+            stamp = now - timedelta(minutes=5 * (80 - index))
+            close = 2000.0 + index * 0.2
+            bars.append({
+                "timestamp": stamp, "open": close - 0.1, "high": close + 0.2,
+                "low": close - 0.2, "close": close, "volume": None,
+            })
+        return pd.DataFrame(bars)
+
+    def test_builds_features_from_recent_completed_bars_without_fabricating_volume(self):
+        now = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+        features, close, feature_timestamp = build_live_feature_snapshot(self._bars(now), now=now)
+        self.assertEqual(feature_timestamp, now - timedelta(minutes=5))
+        self.assertEqual(close, 2015.8)
+        self.assertIn("atr_14", features)
+        self.assertIn("relative_volume", features)
+        self.assertIsNone(features["relative_volume"])
+
+    def test_refuses_stale_live_candles(self):
+        now = datetime(2026, 1, 3, 12, tzinfo=timezone.utc)
+        with self.assertRaises(LiveFeatureUnavailable):
+            build_live_feature_snapshot(
+                self._bars(datetime(2026, 1, 1, 12, tzinfo=timezone.utc)),
+                now=now,
+                max_age_seconds=900,
+            )
+
+    def test_feature_lookup_never_falls_back_to_historical_csv(self):
+        class EmptySession:
+            def scalars(self, _statement):
+                return SimpleNamespace(all=lambda: [])
+
+        with patch.dict(os.environ, {"FEATURES_CSV_PATH": "historical/features.csv"}):
+            with self.assertRaises(services.ServiceUnavailable):
+                services._latest_feature_vector(EmptySession())
+
+    def test_feature_lookup_returns_the_live_bar_timestamp_and_close(self):
+        stamp = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+        row = SimpleNamespace(
+            timestamp=stamp,
+            feature_vector={
+                "atr_14": 1.2,
+                "_source_timestamp": stamp.isoformat(),
+                "_source_price": 2042.5,
+                "_source": "twelve_data_5min",
+            },
+        )
+        class SnapshotSession:
+            def scalars(self, _statement):
+                return SimpleNamespace(all=lambda: [row])
+
+        features, price, feature_timestamp = services._latest_feature_vector(SnapshotSession())
+        self.assertEqual(features, {"atr_14": 1.2})
+        self.assertEqual(price, 2042.5)
+        self.assertEqual(feature_timestamp, stamp)
+
 
 
 if __name__ == "__main__":
