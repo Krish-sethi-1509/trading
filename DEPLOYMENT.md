@@ -1,28 +1,26 @@
 # Step 10: deploy the dashboard
 
-This workspace keeps deployable files under `outputs/`. In your source
-repository, include that directory and point Render/Vercel at the project roots
-listed below. Render supports choosing a Blueprint file outside the repository
-root, which is why the Blueprint is `outputs/render.yaml`.
+This repository stores `backend/`, `frontend/`, `step3/`, and `render.yaml` at its root. Use the repository root for Render and `frontend/` for Vercel.
 
 ## 1. Prepare model and feature artifacts
 
 Before enabling `/predict` or the four-hour scheduler, train the model and make
 the saved artifact available at
-`outputs/step3/artifacts/xgb/xgboost_pipeline.joblib`. Set
+`step3/artifacts/xgb/xgboost_pipeline.joblib`. Set
 `FEATURES_CSV_PATH` to a regularly refreshed engineered feature CSV path
-relative to `outputs/`, or persist the current feature vector in
+relative to `backend/`, or persist the current feature vector in
 `price_history.feature_vector`. Keep the model and feature columns in sync.
 
 The API can start without model/feature files, but prediction requests return
-HTTP 503 until those files/data are present. Use a licensed intraday feed for
-model inputs; the minute quote poll is not a substitute for intraday OHLCV.
+HTTP 503 until those files/data are present. Predictions also fail closed when
+engineered features are older than `FEATURE_MAX_AGE_SECONDS` (default 900 seconds).
+Supply fresh 5-minute OHLCV feature vectors; flat minute quotes are not a substitute.
 
 ## 2. Deploy the API and scheduler on Render
 
-1. Push the repository, including `outputs/backend`, `outputs/step3`, and
-   `outputs/render.yaml`, to your Git host.
-2. In Render, create a Blueprint and choose `outputs/render.yaml` as the
+1. Push the repository, including `backend`, `outputs/step3`, and
+   `render.yaml`, to your Git host.
+2. In Render, create a Blueprint and choose `render.yaml` as the
    Blueprint file path. Render Blueprints normally default to root-level
    `render.yaml`, but allow a custom path. [Render Blueprint docs](https://render.com/docs/infrastructure-as-code)
 3. Review the resources before applying. The Blueprint creates a Postgres
@@ -47,7 +45,7 @@ model inputs; the minute quote poll is not a substitute for intraday OHLCV.
 ## 3. Deploy the React app on Vercel
 
 1. Import the same repository into Vercel.
-2. Set **Root Directory** to `outputs/frontend`.
+2. Set **Root Directory** to `frontend`.
 3. Vercel reads `vercel.json`, runs `npm run build`, and serves `dist`; the
    package also defines `vercel-build`. Vercel's Vite configuration supports
    build and output directory overrides in `vercel.json`. [Vercel Vite docs](https://vercel.com/docs/frameworks/frontend/vite)
@@ -80,7 +78,7 @@ model inputs; the minute quote poll is not a substitute for intraday OHLCV.
 Build with `outputs/` as the Docker context:
 
 ```sh
-cd outputs
+cd .
 docker build -t gold-mvp-api -f Dockerfile .
 docker run --rm -p 8000:8000 --env-file .env gold-mvp-api
 ```
