@@ -212,8 +212,8 @@ def train(
         right_on="past_timestamp",
         direction="backward",
         tolerance=pd.Timedelta(minutes=label_tolerance_minutes),
-    ).sort_values("timestamp_x")
-    persistence_return = persistence["close_x"] / persistence["past_close"] - 1.0
+    ).sort_values("timestamp")
+    persistence_return = persistence["close"] / persistence["past_close"] - 1.0
     persistence_class = np.select(
         [persistence_return < -neutral_threshold, persistence_return > neutral_threshold],
         [0, 2],
