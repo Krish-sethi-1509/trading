@@ -74,7 +74,7 @@ explanations and prohibit personalized or direct buy/sell/hold instructions.
 
 ## Integration smoke checks
 
-From the workspace directory run `python ml/test_pipeline.py` after
+From the repository root run `python ml/test_pipeline.py` after
 installing the backend requirements and configuring provider keys. It checks
 database connectivity read-only, loads the trained model, exercises feature
 calculations, and verifies API response contracts using an isolated temporary
