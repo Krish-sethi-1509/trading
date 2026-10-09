@@ -1,0 +1,83 @@
+# Render Blueprint. In Render, select this file as the Blueprint path because
+# it lives under outputs/ in this workspace. Set secret values in the dashboard.
+databases:
+  - name: gold-mvp-db
+    plan: 0.5c-1g
+    region: oregon
+    databaseName: gold_mvp
+    user: gold_mvp_user
+
+services:
+  - type: web
+    name: gold-mvp-api
+    runtime: python
+    rootDir: outputs
+    region: oregon
+    plan: 1c-2g
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn main:app --app-dir backend --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: gold-mvp-db
+          property: connectionString
+      - key: GOLD_API_KEY
+        sync: false
+      - key: TWELVE_DATA_API_KEY
+        sync: false
+      - key: FRED_API_KEY
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: SEARCH_API_KEY
+        sync: false
+      - key: LLM_PROVIDER
+        value: openai
+      - key: SEARCH_PROVIDER
+        value: tavily
+      - key: OPENAI_MODEL
+        value: gpt-6-astra
+      - key: FRONTEND_URL
+        sync: false
+      - key: MODEL_PATH
+        value: step3/artifacts/xgb/xgboost_pipeline.joblib
+      - key: FEATURES_CSV_PATH
+        sync: false
+      - key: PREDICTION_HORIZON_HOURS
+        value: "4"
+      - key: NEUTRAL_RETURN_THRESHOLD
+        value: "0.001"
+      - key: PRICE_FALLBACK_MAX_STALE_SECONDS
+        value: "900"
+
+  # Scheduler runs separately so multiple web workers don't duplicate jobs.
+  - type: worker
+    name: gold-mvp-scheduler
+    runtime: python
+    rootDir: outputs
+    region: oregon
+    plan: 1c-2g
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: python backend/scheduler.py
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: gold-mvp-db
+          property: connectionString
+      - key: GOLD_API_KEY
+        sync: false
+      - key: TWELVE_DATA_API_KEY
+        sync: false
+      - key: MODEL_PATH
+        value: step3/artifacts/xgb/xgboost_pipeline.joblib
+      - key: FEATURES_CSV_PATH
+        sync: false
+      - key: PREDICTION_HORIZON_HOURS
+        value: "4"
+      - key: NEUTRAL_RETURN_THRESHOLD
+        value: "0.001"
+      - key: PRICE_FALLBACK_MAX_STALE_SECONDS
+        value: "900"
