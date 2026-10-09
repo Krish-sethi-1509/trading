@@ -6,7 +6,7 @@ This repository stores `backend/`, `frontend/`, `step3/`, and `render.yaml` at i
 
 Before enabling `/predict` or the four-hour scheduler, train the model and make
 the saved artifact available at
-`step3/artifacts/xgb/xgboost_pipeline.joblib`. Set
+`step3/artifacts/xgb/xgboost_pipeline.joblib` (configured in Render as `../step3/artifacts/xgb/xgboost_pipeline.joblib`, relative to `backend/`). Set
 `FEATURES_CSV_PATH` to a regularly refreshed engineered feature CSV path
 relative to `backend/`, or persist the current feature vector in
 `price_history.feature_vector`. Keep the model and feature columns in sync.
@@ -18,8 +18,7 @@ Supply fresh 5-minute OHLCV feature vectors; flat minute quotes are not a substi
 
 ## 2. Deploy the API and scheduler on Render
 
-1. Push the repository, including `backend`, `outputs/step3`, and
-   `render.yaml`, to your Git host.
+1. Push the repository, including `backend/`, `step3/`, and `render.yaml`.
 2. In Render, create a Blueprint and choose `render.yaml` as the
    Blueprint file path. Render Blueprints normally default to root-level
    `render.yaml`, but allow a custom path. [Render Blueprint docs](https://render.com/docs/infrastructure-as-code)
@@ -38,9 +37,10 @@ Supply fresh 5-minute OHLCV feature vectors; flat minute quotes are not a substi
 5. Confirm Render has linked the database-generated `DATABASE_URL`. The
    backend normalizes Render's `postgresql://` URL to its installed psycopg v3
    driver.
-6. Wait for the API health check at `/health` to pass. Keep only one scheduler
-   worker; the API can use multiple web workers without starting duplicate
-   cron jobs.
+6. The API start command runs `alembic upgrade head` before Uvicorn. For an
+   existing database created by the previous `create_all` startup, stamp the
+   existing schema once with `alembic stamp 0001_initial` before deploying this
+   branch. Keep one scheduler worker; API workers do not start duplicate jobs.
 
 ## 3. Deploy the React app on Vercel
 
@@ -78,9 +78,8 @@ Supply fresh 5-minute OHLCV feature vectors; flat minute quotes are not a substi
 Build with the repository root as the Docker context:
 
 ```sh
-cd .
 docker build -t gold-mvp-api -f Dockerfile .
-docker run --rm -p 8000:8000 --env-file .env gold-mvp-api
+docker run --rm -p 8000:8000 --env-file backend/.env gold-mvp-api
 ```
 
 The Docker image runs only the API. Run `python backend/scheduler.py` as a
