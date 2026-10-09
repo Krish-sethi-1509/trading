@@ -70,10 +70,10 @@ class OutcomeToleranceTests(unittest.TestCase):
         session.add(row)
         return row
 
-    def _price(self, session, stamp):
+    def _price(self, session, stamp, price=2001.0):
         session.add(PriceHistory(
-            symbol="XAU/USD", timestamp=stamp, open=2001.0, high=2001.0,
-            low=2001.0, close=2001.0, volume=None, macro_features={}, feature_vector={},
+            symbol="XAU/USD", timestamp=stamp, open=price, high=price,
+            low=price, close=price, volume=None, macro_features={}, feature_vector={},
         ))
 
     def test_does_not_score_using_a_price_beyond_tolerance(self):
@@ -92,7 +92,7 @@ class OutcomeToleranceTests(unittest.TestCase):
         target = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
         with self.Session() as session:
             prediction = self._pending_prediction(session, target)
-            self._price(session, target + timedelta(minutes=5))
+            self._price(session, target + timedelta(minutes=5), price=2004.0)
             session.commit()
             with patch.object(services, "utc_now", return_value=target + timedelta(minutes=6)), \
                  patch.dict(os.environ, {"OUTCOME_MAX_DELAY_SECONDS": "900"}):
