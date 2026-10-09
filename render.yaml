@@ -41,14 +41,16 @@ services:
         sync: false
       - key: MODEL_PATH
         value: ../step3/artifacts/xgb/xgboost_pipeline.joblib
-      - key: FEATURES_CSV_PATH
-        sync: false
       - key: PREDICTION_HORIZON_HOURS
         value: "4"
       - key: NEUTRAL_RETURN_THRESHOLD
         value: "0.001"
       - key: PRICE_FALLBACK_MAX_STALE_SECONDS
         value: "900"
+      - key: LIVE_FEATURE_BAR_COUNT
+        value: "500"
+      - key: LIVE_FEATURE_CACHE_SECONDS
+        value: "240"
       - key: FEATURE_MAX_AGE_SECONDS
         value: "900"
       - key: OUTCOME_MAX_DELAY_SECONDS
@@ -74,8 +76,6 @@ services:
         sync: false
       - key: MODEL_PATH
         value: ../step3/artifacts/xgb/xgboost_pipeline.joblib
-      - key: FEATURES_CSV_PATH
-        sync: false
       - key: PREDICTION_HORIZON_HOURS
         value: "4"
       - key: NEUTRAL_RETURN_THRESHOLD
