@@ -1,11 +1,14 @@
 import lzma
 import struct
 import unittest
+from io import BytesIO
+from unittest.mock import patch
+from urllib.error import HTTPError
 from datetime import date
 
 import pandas as pd
 
-from step3.download_historical_xauusd import (decode_bi5, midpoint_bars, resample_five_minutes, validate_history_coverage)
+from step3.download_historical_xauusd import (decode_bi5, fetch_side, midpoint_bars, resample_five_minutes, validate_history_coverage)
 
 
 class DukascopyDecoderTests(unittest.TestCase):
@@ -36,6 +39,17 @@ class DukascopyDecoderTests(unittest.TestCase):
         self.assertEqual(five.loc[0, "low"], 100.0)
         self.assertEqual(five.loc[0, "close"], 101.5)
         self.assertEqual(five.loc[0, "volume"], 25.0)
+
+    def test_fetch_retries_transient_http_503(self):
+        row = struct.pack(">IIIIIf", 60, 2_650_000, 2_651_000, 2_649_000, 2_652_000, 12.5)
+        payload = lzma.compress(row, format=lzma.FORMAT_ALONE)
+        transient = HTTPError("https://example.test", 503, "busy", None, None)
+        with patch("step3.download_historical_xauusd.urlopen", side_effect=[transient, BytesIO(payload)]) as request:
+            with patch("step3.download_historical_xauusd.time.sleep"):
+                result = fetch_side(date(2026, 1, 2), "BID")
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(len(result), 1)
+        self.assertAlmostEqual(result.loc[0, "close"], 2651.0)
 
     def test_reject_malformed_record(self):
         with self.assertRaisesRegex(ValueError, "Malformed BI5"):
