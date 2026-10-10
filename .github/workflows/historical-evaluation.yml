@@ -39,15 +39,26 @@ jobs:
           print(f"start={start.isoformat()}")
           print(f"end={end.isoformat()}")
           PY
-      - name: Download and normalize Dukascopy XAU/USD
+      - name: Download and validate six-month XAU/USD history
+        env:
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
         run: |
-          python step3/download_historical_xauusd.py \
-            --start-date "${{ steps.window.outputs.start }}" \
-            --end-date "${{ steps.window.outputs.end }}" \
-            --output "$RUNNER_TEMP/xauusd_5m.csv" \
-            --coverage-report "$RUNNER_TEMP/xauusd_coverage.json" \
-            --workers 2 \
-            --omit-volume
+          if [ -n "$TWELVE_DATA_API_KEY" ]; then
+            python step3/download_twelvedata_xauusd.py \
+              --start-date "${{ steps.window.outputs.start }}" \
+              --end-date "${{ steps.window.outputs.end }}" \
+              --output "$RUNNER_TEMP/xauusd_5m.csv" \
+              --coverage-report "$RUNNER_TEMP/xauusd_coverage.json"
+          else
+            echo "TWELVE_DATA_API_KEY is not configured; using resilient Dukascopy fallback."
+            python step3/download_historical_xauusd.py \
+              --start-date "${{ steps.window.outputs.start }}" \
+              --end-date "${{ steps.window.outputs.end }}" \
+              --output "$RUNNER_TEMP/xauusd_5m.csv" \
+              --coverage-report "$RUNNER_TEMP/xauusd_coverage.json" \
+              --workers 2 \
+              --omit-volume
+          fi
       - name: Engineer features and evaluate models
         run: |
           python step3/feature_engineering.py \
