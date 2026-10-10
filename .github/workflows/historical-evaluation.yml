@@ -27,8 +27,10 @@ jobs:
           cache: pip
           cache-dependency-path: step3/requirements.txt
       - run: python -m pip install -r step3/requirements.txt
-      - name: Test Dukascopy decoder and resampling
-        run: python -m unittest step3.test_download_historical_xauusd -v
+      - name: Test historical provider downloaders and coverage checks
+        run: |
+          python -m unittest step3.test_download_historical_xauusd -v
+          python -m unittest step3.test_download_twelvedata_xauusd -v
       - name: Set six-month UTC window
         id: window
         run: |
@@ -72,7 +74,7 @@ jobs:
       - name: Save historical data and model evaluation
         uses: actions/upload-artifact@v4
         with:
-          name: xauusd-dukascopy-six-month-evaluation-${{ github.sha }}
+          name: xauusd-six-month-evaluation-${{ github.sha }}
           path: |
             ${{ runner.temp }}/xauusd_5m.csv
             ${{ runner.temp }}/xauusd_coverage.json
