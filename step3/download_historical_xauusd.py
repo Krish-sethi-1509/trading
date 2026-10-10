@@ -12,6 +12,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 import lzma
+import random
 import struct
 import time
 import warnings
@@ -44,21 +45,28 @@ def decode_bi5(payload: bytes, day: date) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
 
-def fetch_side(day: date, side: str, *, retries: int = 4) -> pd.DataFrame:
+def fetch_side(day: date, side: str, *, retries: int = 7) -> pd.DataFrame:
     """Fetch one UTC day's BID or ASK candles; missing market days return empty."""
     month_index = day.month - 1
     url = (f"{BASE_URL}/XAUUSD/{day.year}/{month_index:02d}/{day.day:02d}/"
            f"{side}_candles_min_1.bi5")
     request = Request(url, headers={"User-Agent": "xauusd-research/1.0"})
     for attempt in range(retries):
+        retry_delay = min(30.0, 1.0 * (2 ** attempt))
         try:
-            with urlopen(request, timeout=12) as response:
+            with urlopen(request, timeout=25) as response:
                 return decode_bi5(response.read(), day)
         except HTTPError as exc:
             if exc.code == 404:
                 return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
             if exc.code not in (408, 429, 500, 502, 503, 504):
                 raise
+            retry_after = exc.headers.get("Retry-After") if exc.headers else None
+            if retry_after:
+                try:
+                    retry_delay = min(60.0, max(retry_delay, float(retry_after)))
+                except ValueError:
+                    pass
             if attempt + 1 == retries:
                 warnings.warn(f"Skipping {side} {day}: HTTP {exc.code}", RuntimeWarning)
                 return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
@@ -66,7 +74,7 @@ def fetch_side(day: date, side: str, *, retries: int = 4) -> pd.DataFrame:
             if attempt + 1 == retries:
                 warnings.warn(f"Skipping {side} {day} after network timeout: {exc}", RuntimeWarning)
                 return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
-        time.sleep(0.5 * (2 ** attempt))
+        time.sleep(retry_delay + random.uniform(0.0, 0.5))
     return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 
 
