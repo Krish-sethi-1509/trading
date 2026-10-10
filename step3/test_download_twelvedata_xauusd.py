@@ -1,6 +1,6 @@
 import unittest
 from datetime import date
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pandas as pd
 
@@ -33,6 +33,27 @@ class TwelveDataCoverageTests(unittest.TestCase):
         report = coverage_report(self._bars(), date(2026, 1, 5), date(2026, 6, 30))
         self.assertFalse(report["complete"])
         self.assertFalse(report["endpoint_coverage_ok"])
+
+    def test_fetch_window_waits_for_rate_limit_reset_and_retries(self):
+        limited = Mock(status_code=429, headers={})
+        success = Mock(status_code=200, headers={})
+        success.json.return_value = {
+            "values": [{
+                "datetime": "2026-01-05 00:00:00",
+                "open": "2000", "high": "2001", "low": "1999", "close": "2000.5",
+            }]
+        }
+        with patch("step3.download_twelvedata_xauusd.requests.get", side_effect=[limited, success]) as request:
+            with patch("step3.download_twelvedata_xauusd.time.sleep") as sleep:
+                from step3.download_twelvedata_xauusd import fetch_window
+                result = fetch_window(
+                    pd.Timestamp("2026-01-05T00:00:00Z").to_pydatetime(),
+                    pd.Timestamp("2026-01-06T00:00:00Z").to_pydatetime(),
+                    "test-key",
+                )
+        self.assertEqual(request.call_count, 2)
+        self.assertTrue(sleep.called)
+        self.assertEqual(len(result), 1)
 
     def test_download_uses_requested_period_chunks_and_volume_free_schema(self):
         bars = self._bars().iloc[:276].copy()
