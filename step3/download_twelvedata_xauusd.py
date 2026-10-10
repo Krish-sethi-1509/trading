@@ -58,9 +58,16 @@ def fetch_window(
                     )
                 retry_after = response.headers.get("Retry-After")
                 try:
-                    delay = min(60.0, max(float(retry_after), 1.0)) if retry_after else min(30.0, 2.0 ** attempt)
+                    if retry_after:
+                        delay = min(120.0, max(float(retry_after), 1.0))
+                    elif response.status_code == 429:
+                        # Twelve Data Basic allows 8 API credits/minute. Wait for
+                        # the next minute quota reset instead of retrying inside it.
+                        delay = 60.0 - datetime.now(timezone.utc).second + 1.0
+                    else:
+                        delay = min(30.0, 2.0 ** attempt)
                 except ValueError:
-                    delay = min(30.0, 2.0 ** attempt)
+                    delay = 60.0 - datetime.now(timezone.utc).second + 1.0
                 time.sleep(delay + random.uniform(0.0, 0.5))
                 continue
             response.raise_for_status()
@@ -158,7 +165,7 @@ def coverage_report(
 
 
 def download_history(start: date, end: date, api_key: str) -> pd.DataFrame:
-    """Download 5-day UTC chunks, staying below Twelve Data's 5,000-bar response cap."""
+    """Download 7-day UTC chunks, staying below Twelve Data's 5,000-bar response cap."""
     if not api_key:
         raise DataDownloadError("TWELVE_DATA_API_KEY is not set.")
     if end < start:
@@ -168,13 +175,14 @@ def download_history(start: date, end: date, api_key: str) -> pd.DataFrame:
     frames = []
     cursor = start_dt
     while cursor <= end_dt:
-        window_end = min(cursor + timedelta(days=5) - timedelta(seconds=1), end_dt)
+        window_end = min(cursor + timedelta(days=7) - timedelta(seconds=1), end_dt)
         chunk = fetch_window(cursor, window_end, api_key)
         if not chunk.empty:
             frames.append(chunk)
         cursor = window_end + timedelta(seconds=1)
-        # Respect provider request quotas while keeping the full range practical.
-        time.sleep(0.25)
+        # Stay within Twelve Data Basic's 8 API credits/minute allowance.
+        if cursor <= end_dt:
+            time.sleep(8.0)
     bars = (
         pd.concat(frames, ignore_index=True)
         if frames else pd.DataFrame(columns=OUTPUT_COLUMNS)
