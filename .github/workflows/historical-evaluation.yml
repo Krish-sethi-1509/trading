@@ -41,26 +41,19 @@ jobs:
           print(f"start={start.isoformat()}")
           print(f"end={end.isoformat()}")
           PY
-      - name: Download and validate six-month XAU/USD history
+      - name: Download and validate six-month XAU/USD history from Twelve Data
         env:
           TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
         run: |
-          if [ -n "$TWELVE_DATA_API_KEY" ]; then
-            python step3/download_twelvedata_xauusd.py \
-              --start-date "${{ steps.window.outputs.start }}" \
-              --end-date "${{ steps.window.outputs.end }}" \
-              --output "$RUNNER_TEMP/xauusd_5m.csv" \
-              --coverage-report "$RUNNER_TEMP/xauusd_coverage.json"
-          else
-            echo "TWELVE_DATA_API_KEY is not configured; using resilient Dukascopy fallback."
-            python step3/download_historical_xauusd.py \
-              --start-date "${{ steps.window.outputs.start }}" \
-              --end-date "${{ steps.window.outputs.end }}" \
-              --output "$RUNNER_TEMP/xauusd_5m.csv" \
-              --coverage-report "$RUNNER_TEMP/xauusd_coverage.json" \
-              --workers 2 \
-              --omit-volume
+          if [ -z "$TWELVE_DATA_API_KEY" ]; then
+            echo "::error::Add the TWELVE_DATA_API_KEY repository Actions secret before running the six-month evaluation."
+            exit 1
           fi
+          python step3/download_twelvedata_xauusd.py \
+            --start-date "${{ steps.window.outputs.start }}" \
+            --end-date "${{ steps.window.outputs.end }}" \
+            --output "$RUNNER_TEMP/xauusd_5m.csv" \
+            --coverage-report "$RUNNER_TEMP/xauusd_coverage.json"
       - name: Engineer features and evaluate models
         run: |
           python step3/feature_engineering.py \
