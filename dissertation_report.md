@@ -4,10 +4,10 @@
 
 **Author:** [Student name]  
 **Programme / Institution:** [Programme and institution]  
-**Date:** 9 October 2026  
-**Status:** System and methodology draft; corrected short-sample evaluation completed, multi-regime evaluation pending
+**Date:** 10 October 2026  
+**Status:** Six-month historical evaluation completed in GitHub Actions run 31; further multi-regime and untouched-period evaluation remains pending
 
-> **Evidence note.** The repository contains a short intraday feature dataset and a fitted model with saved holdout artifacts. The recorded holdout is a legacy run from a short sample and predates the forward-only label, purge, and baseline changes documented here. Its metrics are reported transparently below as diagnostic results, not as evidence of validated predictive performance. Retrain with the corrected pipeline before presenting final results.
+> **Evidence note.** GitHub Actions run 31 completed the corrected six-month Twelve Data download, coverage validation, feature engineering, training, walk-forward evaluation, and artifact upload. The verified holdout achieved 55.18% accuracy, 0.5467 macro-F1, and 0.5392 balanced accuracy; Random Forest was selected by walk-forward macro-F1. This is a single six-month evaluation and does not establish stable forecasting skill, an 85% accuracy level, or economic profitability. The report records the run’s measured results below; obtain additional regimes and a later untouched test period before making stronger claims.
 
 ## Abstract
 
@@ -154,42 +154,39 @@ The corrected protocol reports a latest-20% chronological holdout and three expa
 
 ## 4. Model Development and Evaluation
 
-### 4.1 Available empirical results
+### 4.1 Run 31: six-month evaluation
 
-The checked-in sample contains 5,000 raw five-minute bars spanning approximately 21 September–8 October 2026. The corrected experiment in GitHub Actions run 90 used forward-only four-hour labels, a five-minute target tolerance, and a 48-row purge at temporal boundaries. The chronological holdout contained 991 observations (478 Down, 186 Neutral, 327 Up), with 3,913 training rows and 26 features. Full metrics are recorded in [the evaluation metrics file](step3/artifacts/evaluation/metrics.json); predictions and per-class outputs are retained as the [run 90 Actions artifact](https://github.com/Krish-sethi-1509/trading/actions/runs/37951422386).
+GitHub Actions run 31 completed the full Twelve Data historical evaluation on the feature branch. The requested date range was 11 April–8 October 2026. The downloaded series began at 2026-04-11 00:00 UTC and ended at 2026-10-08 23:55 UTC, with 52,127 five-minute bars. The coverage validator checked all 129 expected weekdays, required at least 200 bars per weekday, found no missing or short weekdays, confirmed both endpoints, and marked coverage complete. The weekday reference was 35,604 bars; the larger observed count includes additional provider timestamps outside that weekday-only expectation.
 
-The model-selection procedure compared class-balanced XGBoost and Random Forest on three identical purged expanding windows and selected XGBoost by mean walk-forward macro-F1. On the final chronological holdout, XGBoost achieved 36.02% accuracy, 0.2666 macro-F1, and 0.3308 balanced accuracy. It did not beat logistic regression, which achieved 38.45% accuracy, 0.3212 macro-F1, and 0.3577 balanced accuracy. Therefore, this result does not support a claim that the selected tree model is more accurate than the simpler baseline. Neither model is established as a dependable forecasting method by this short, single-regime sample. The fitted serving artifact remains the legacy model and was not replaced by this experiment.
+The experiment used 41,615 training rows, purged 48 boundary rows, and evaluated 10,416 chronological holdout rows using 26 features. The selected model was Random Forest. The exact uploaded outputs are retained in the [Run 31 GitHub Actions artifact](https://github.com/Krish-sethi-1509/trading/actions/runs/38045344582).
 
-### 4.2 Confusion matrix interpretation
+### 4.2 Holdout metrics and confusion matrix
 
-The legacy matrix is reported above with actual classes as rows and predicted classes as columns. Its off-diagonal counts show that 414 of 478 actual Down cases were predicted Up. Diagonal cells are correct classifications. Off-diagonal cells expose direction errors—for example, a true Down observation predicted Up—and Neutral-class behavior. Precision for class (k) is (TP_k/(TP_k+FP_k)), while recall is (TP_k/(TP_k+FN_k)). Precision measures the fraction of predictions for a class that were correct; recall measures the fraction of actual class observations recovered. In a three-class setting, both should be reported per class rather than reduced to a single undifferentiated score.
+| Metric | Holdout result |
+|---|---:|
+| Accuracy | 55.18% |
+| Macro-F1 | 0.5467 |
+| Balanced accuracy | 0.5392 |
+| Log loss | 0.8543 |
+| Multiclass Brier score | 0.5093 |
+| Expected calibration error (10 bins) | 0.0756 |
 
-### 4.3 Baseline comparison
+The confusion matrix (actual rows, predicted columns; class order Down, Neutral, Up) was `[[1926, 95, 1287], [959, 2634, 636], [1644, 47, 1188]]`. Errors remain substantial across all classes. Accuracy alone is not an adequate summary; macro-F1 and balanced accuracy reflect per-class performance more fairly, while log loss, Brier score, and calibration error describe probabilistic predictions.
 
-All methods were evaluated on the same 991 chronological holdout rows. The training-majority class was Neutral; the persistence baseline uses the prior four-hour move; logistic regression is class-weighted and uses the same engineered inputs.
+### 4.3 Baseline comparison and walk-forward results
 
-| Model | Accuracy | Balanced accuracy | Macro-F1 | Log loss |
-|---|---:|---:|---:|---:|
-| Training-majority (Neutral) | 18.77% | 33.33% | 0.1054 | — |
-| Four-hour persistence | 32.09% | 28.44% | 0.2867 | — |
-| Logistic regression | 38.45% | 35.77% | 0.3212 | 1.1168 |
-| Random Forest (walk-forward candidate; not selected) | — | — | — | — |
-| XGBoost (selected by walk-forward macro-F1) | 36.02% | 33.08% | 0.2666 | 1.7992 |
-
-The holdout XGBoost confusion matrix (actual rows, predicted columns; Down, Neutral, Up) was `[[110, 24, 344], [64, 3, 119], [82, 1, 244]]`. It predicted Up too often and achieved an expected calibration error of 0.3990 and multiclass Brier score of 0.9554. Across three expanding folds, XGBoost averaged 48.33% accuracy, 0.4591 macro-F1, 0.4837 balanced accuracy, and 1.4280 log loss. Random Forest averaged 37.61% accuracy, 0.3398 macro-F1, 0.4126 balanced accuracy, and 1.1867 log loss. Fold variation and the short sample limit interpretation. Walk-forward selection scores do not substitute for the later chronological holdout, and the selected XGBoost did not outperform logistic regression there.
-
-The evidence does not establish dependable forecasting skill. Do not present this experiment as a verified improvement in predictive accuracy; more history across market regimes and another untouched evaluation period are needed.
-
-### 4.4 Recommended reporting table
+All holdout methods use the same 10,416 test rows.
 
 | Model | Accuracy | Balanced accuracy | Macro-F1 | Log loss |
 |---|---:|---:|---:|---:|
-| Training-majority (Neutral) | 18.77% | 33.33% | 0.1054 | — |
-| Four-hour persistence | 32.09% | 28.44% | 0.2867 | — |
-| Logistic regression | 38.45% | 35.77% | 0.3212 | 1.1168 |
-| XGBoost | 37.34% | 34.28% | 0.2923 | 1.7021 |
+| Training-majority (Neutral) | 40.60% | 0.3333 | 0.1925 | — |
+| Four-hour persistence | 49.37% | 0.4675 | 0.4675 | — |
+| Logistic regression | 51.90% | 0.5225 | 0.4350 | 0.9052 |
+| Random Forest (selected) | 55.18% | 0.5392 | 0.5467 | 0.8543 |
 
-The XGBoost confusion matrix (actual rows, predicted columns; Down, Neutral, Up) was `[[126, 30, 322], [74, 8, 104], [87, 4, 236]]`. The holdout contained 478 Down, 186 Neutral, and 327 Up observations. There is no price-only baseline in the trainer, so it is not reported.
+Across three expanding-window folds, Random Forest averaged 55.09% accuracy, 0.5413 balanced accuracy, 0.5462 macro-F1, and 0.8543 log loss. XGBoost averaged 54.56% accuracy, 0.5293 balanced accuracy, 0.5318 macro-F1, and 0.9759 log loss. Random Forest’s holdout results exceed these baselines on this evaluation, but the evidence is limited to this six-month sample and split. It does not demonstrate generalization to other market regimes, a future untouched period, or profitable trading after costs. The result is also well below 85% accuracy; no claim of that level is supported.
+
+The previous short-sample metrics (including the 37% legacy result and Run 90 figures) are superseded for this experiment and should not be presented as Run 31 results. Run 31 does not itself test the deployed API against a changing live market; live-serving parity and provider-failure behavior should be verified separately.
 
 ## 5. System Architecture
 
@@ -237,7 +234,7 @@ The dashboard and assistant are designed for educational research and decision s
 
 This project specifies an end-to-end prototype for four-hour XAU/USD direction classification, combining price-action features with lagged macroeconomic information and rule-based liquidity/session proxies. It pairs the modeling workflow with a FastAPI/PostgreSQL backend, React visualization dashboard, and a web-grounded assistant intended to explain macroeconomic context without making personalized trading recommendations. The architecture is suitable as a research MVP, while the current evidence does not yet establish forecasting performance.
 
-The next research priorities are to obtain and document synchronized intraday data; verify point-in-time feature availability and model/data parity; correct target alignment to be strictly forward-looking; add a temporal gap or purge; run baselines and ablations; report class-wise metrics and calibration; evaluate robustness across time regimes; and conduct a separate cost-aware backtest only after predefining a decision policy. Direct options, futures, and financing inputs would be required before making claims about dealer gamma, FX swaps, or central-bank basis. The dissertation’s central conclusion should ultimately be determined by those experiments, including the possibility that the multi-layer model does not outperform simple baselines.
+The completed Run 31 provides a reproducible six-month result with forward-only target matching, purged chronological evaluation, baseline comparisons, and calibration metrics. Random Forest outperformed the included baselines on this holdout, but its 55.18% accuracy and limited date span do not establish robust forecasting skill and do not support an 85% accuracy claim. Next steps are to repeat the evaluation on additional market regimes and a later untouched period, verify serving behavior against changing live data, perform feature ablations and sensitivity analysis, and assess any pre-specified strategy with spread, fees, slippage, and execution constraints. Direct options, futures, and financing inputs would be required before making claims about dealer gamma, FX swaps, or central-bank basis.
 
 ## References
 
