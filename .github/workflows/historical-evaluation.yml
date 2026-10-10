@@ -1,0 +1,79 @@
+name: historical-evaluation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "step3/**"
+      - ".github/workflows/historical-evaluation.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: historical-evaluation-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  historical-evaluation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: step3/requirements.txt
+      - run: python -m pip install -r step3/requirements.txt
+      - name: Test historical provider downloaders and coverage checks
+        run: |
+          python -m unittest step3.test_download_historical_xauusd -v
+          python -m unittest step3.test_download_twelvedata_xauusd -v
+      - name: Set six-month UTC window
+        id: window
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          from datetime import date, timedelta
+          end = date.today() - timedelta(days=2)
+          start = end - timedelta(days=180)
+          print(f"start={start.isoformat()}")
+          print(f"end={end.isoformat()}")
+          PY
+      - name: Download and validate six-month XAU/USD history from Twelve Data
+        env:
+          TWELVE_DATA_API_KEY: ${{ secrets.TWELVE_DATA_API_KEY }}
+        run: |
+          if [ -z "$TWELVE_DATA_API_KEY" ]; then
+            echo "::error::Add the TWELVE_DATA_API_KEY repository Actions secret before running the six-month evaluation."
+            exit 1
+          fi
+          python step3/download_twelvedata_xauusd.py \
+            --start-date "${{ steps.window.outputs.start }}" \
+            --end-date "${{ steps.window.outputs.end }}" \
+            --output "$RUNNER_TEMP/xauusd_5m.csv" \
+            --coverage-report "$RUNNER_TEMP/xauusd_coverage.json"
+      - name: Engineer features and evaluate models
+        run: |
+          python step3/feature_engineering.py \
+            --gold "$RUNNER_TEMP/xauusd_5m.csv" \
+            --tips step3/data/tips.csv \
+            --output "$RUNNER_TEMP/xauusd_features.csv"
+          python step3/train_xgboost.py \
+            --input "$RUNNER_TEMP/xauusd_features.csv" \
+            --output-dir "$RUNNER_TEMP/xauusd_evaluation"
+          cat "$RUNNER_TEMP/xauusd_evaluation/metrics.json"
+      - name: Save historical data and model evaluation
+        uses: actions/upload-artifact@v4
+        with:
+          name: xauusd-six-month-evaluation-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/xauusd_5m.csv
+            ${{ runner.temp }}/xauusd_coverage.json
+            ${{ runner.temp }}/xauusd_evaluation/metrics.json
+            ${{ runner.temp }}/xauusd_evaluation/test_predictions.csv
+            ${{ runner.temp }}/xauusd_evaluation/classification_report.csv
+            ${{ runner.temp }}/xauusd_evaluation/confusion_matrix.csv
+            ${{ runner.temp }}/xauusd_evaluation/xgboost_pipeline.joblib
+          if-no-files-found: error

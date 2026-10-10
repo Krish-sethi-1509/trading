@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from database import SessionLocal
 from models import PriceHistory, PredictionLog
+from live_features import LiveFeatureUnavailable, fetch_live_feature_snapshot
 
 logger = logging.getLogger(__name__)
 UTC = timezone.utc
@@ -52,6 +53,12 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def _request_json(url: str, *, params: dict | None = None, headers: dict | None = None) -> dict[str, Any]:
     try:
         response = requests.get(url, params=params, headers=headers, timeout=HTTP_TIMEOUT)
@@ -74,6 +81,11 @@ def _request_json(url: str, *, params: dict | None = None, headers: dict | None 
 
 def fetch_live_quote() -> dict[str, Any]:
     """Try configured providers in order, then a recent last-known database quote."""
+    cache_ttl = max(0, int(os.getenv("PRICE_CACHE_SECONDS", "15")))
+    if _LAST_GOOD_QUOTE is not None and cache_ttl:
+        age = (utc_now() - _LAST_GOOD_QUOTE["timestamp"]).total_seconds()
+        if 0 <= age <= cache_ttl:
+            return {**_LAST_GOOD_QUOTE, "source": f"cached_{_LAST_GOOD_QUOTE['source']}"}
     failures: list[str] = []
     goldapi_key = os.getenv("GOLDAPI_API_KEY") or os.getenv("GOLD_API_KEY")
     if goldapi_key:
@@ -170,6 +182,20 @@ def refresh_live_price() -> dict[str, Any]:
     timestamp = quote["timestamp"].replace(second=0, microsecond=0)
     # Spot quote APIs do not necessarily publish volume or candle OHLC. Do not
     # fabricate these: a quote is represented as a flat OHLC minute bar.
+    # Minute spot quotes are not OHLCV candles. Build model inputs from recent
+    # completed 5-minute provider bars and retain the true input timestamp.
+    feature_vector: dict[str, Any] = {}
+    try:
+        features, feature_price, feature_timestamp = fetch_live_feature_snapshot()
+        feature_vector = {
+            **features,
+            "_source_timestamp": feature_timestamp.isoformat(),
+            "_source_price": feature_price,
+            "_source": "twelve_data_5min",
+        }
+    except LiveFeatureUnavailable as exc:
+        logger.warning("Live engineered features unavailable: %s", exc)
+
     row = {
         "symbol": "XAU/USD",
         "timestamp": timestamp,
@@ -179,7 +205,7 @@ def refresh_live_price() -> dict[str, Any]:
         "close": quote["price"],
         "volume": None,
         "macro_features": {},
-        "feature_vector": {},
+        "feature_vector": feature_vector,
     }
     # Keep the quote endpoint usable during a transient database outage too;
     # callers receive the observed quote, while persistence failure is logged.
@@ -192,6 +218,7 @@ def refresh_live_price() -> dict[str, Any]:
                     "close": statement.excluded.close,
                     "high": func.greatest(PriceHistory.high, statement.excluded.high),
                     "low": func.least(PriceHistory.low, statement.excluded.low),
+                    "feature_vector": statement.excluded.feature_vector,
                 },
             )
             session.execute(statement)
@@ -227,67 +254,49 @@ def _load_artifacts() -> tuple[Any, Any | None, list[str] | None]:
             raise ServiceUnavailable("MODEL_FEATURES_PATH must contain a JSON array of feature names")
     else:
         feature_names = getattr(model, "gold_feature_columns_", None)
+    embedded_features = getattr(model, "gold_feature_columns_", None)
+    if embedded_features is not None and feature_names != embedded_features:
+        raise ServiceUnavailable("Model and feature manifest use different feature columns or order")
     _MODEL_CACHE.update(signature=signature, model=model, scaler=scaler, features=feature_names)
     return model, scaler, feature_names
 
 
 def _latest_feature_vector(session: Session) -> tuple[dict[str, Any], float, datetime]:
-    latest = session.scalar(
-        select(PriceHistory).where(PriceHistory.symbol == "XAU/USD").order_by(PriceHistory.timestamp.desc()).limit(1)
-    )
-    if latest is not None and latest.feature_vector:
-        return dict(latest.feature_vector), float(latest.close), latest.timestamp
-
-    feature_csv = os.getenv("FEATURES_CSV_PATH")
-    default_features_path = Path(__file__).resolve().parent.parent / "step3/data/features.csv"
-    configured_features_path = _resolve_backend_path(feature_csv) if feature_csv else None
-    if configured_features_path and configured_features_path.is_file():
-        path = configured_features_path
-    elif default_features_path.is_file():
-        path = default_features_path
-        if configured_features_path:
-            logger.warning(
-                "Configured FEATURES_CSV_PATH is missing (%s); using the project's existing features.csv (%s)",
-                configured_features_path,
-                path,
-            )
-    elif configured_features_path:
+    """Return a persisted live feature snapshot; never fall back to historical CSV data."""
+    rows = session.scalars(
+        select(PriceHistory).where(PriceHistory.symbol == "XAU/USD")
+        .order_by(PriceHistory.timestamp.desc()).limit(1)
+    ).all()
+    if not rows:
         raise ServiceUnavailable(
-            "Feature CSV not found. The configured path is missing: "
-            f"{configured_features_path}; the project default is also missing: {default_features_path}. "
-            "Create the feature CSV with the Step 3 pipeline or correct FEATURES_CSV_PATH in backend/.env."
+            "No engineered live feature vector is stored. The scheduler must fetch recent completed "
+            "5-minute XAU/USD candles using TWELVE_DATA_API_KEY before prediction."
         )
-    else:
-        path = None
-
-    if path is not None:
-        try:
-            data = pd.read_csv(path)
-            if data.empty or "close" not in data:
-                raise ValueError("CSV must contain at least one row and a close column")
-            row = data.iloc[-1]
-            timestamp = pd.to_datetime(row["timestamp"], utc=True).to_pydatetime() if "timestamp" in data else utc_now()
-            features = {
-                str(key): float(value)
-                for key, value in row.items()
-                if key not in {"timestamp", "target_timestamp", "future_timestamp", "target_class", "future_close", "future_return"}
-                and pd.notna(value)
-                and isinstance(value, (int, float, np.integer, np.floating))
-            }
-            reference_price = float(latest.close) if latest is not None else float(row["close"])
-            return features, reference_price, timestamp
-        except (OSError, ValueError, TypeError, IndexError) as exc:
-            raise ServiceUnavailable(f"Could not load latest feature vector from CSV: {exc}") from exc
-    raise ServiceUnavailable(
-        "No feature vector is stored in price_history; populate feature_vector or configure FEATURES_CSV_PATH"
-    )
-
+    # A failed current refresh is represented by an empty newest row. Do not
+    # silently roll back to an older vector even if it is inside the age limit.
+    row = rows[0]
+    stored = row.feature_vector or {}
+    if not stored.get("_source_timestamp") or stored.get("_source_price") is None:
+        raise ServiceUnavailable(
+            "The latest market refresh did not produce a complete feature snapshot; refusing prediction."
+        )
+    try:
+        timestamp = pd.to_datetime(stored["_source_timestamp"], utc=True, errors="raise").to_pydatetime()
+        features = {key: value for key, value in stored.items() if not key.startswith("_")}
+        return features, float(stored["_source_price"]), timestamp
+    except (TypeError, ValueError) as exc:
+        raise ServiceUnavailable("The latest live feature snapshot is malformed; refusing prediction.") from exc
 
 def _prepare_feature_frame(features: dict[str, Any], model: Any, feature_names: list[str] | None) -> pd.DataFrame:
     if feature_names is None:
         feature_names = list(getattr(model, "feature_names_in_", []))
     if not feature_names:
         raise ServiceUnavailable("Model has no stored feature order; set MODEL_FEATURES_PATH")
+    if len(feature_names) != len(set(feature_names)):
+        raise ServiceUnavailable("Model feature order contains duplicate names")
+    missing = [name for name in feature_names if name not in features]
+    if missing:
+        raise ServiceUnavailable("Live feature schema is missing model inputs: " + ", ".join(missing))
     try:
         # Missing or undefined rolling features stay NaN so the pipeline's
         # fitted imputer can handle warm-up windows and unavailable indicators.
@@ -302,6 +311,14 @@ def _prepare_feature_frame(features: dict[str, Any], model: Any, feature_names: 
 def create_prediction(session: Session) -> dict[str, Any]:
     """Run inference, persist a prediction, and return the API response shape."""
     features, reference_price, feature_timestamp = _latest_feature_vector(session)
+    feature_timestamp = _as_utc(feature_timestamp)
+    max_age = max(0, int(os.getenv("FEATURE_MAX_AGE_SECONDS", "900")))
+    feature_age = (utc_now() - feature_timestamp).total_seconds()
+    if feature_age < 0 or feature_age > max_age:
+        raise ServiceUnavailable(
+            f"Latest engineered features are stale ({max(0, int(feature_age))} seconds old; "
+            f"maximum is {max_age}). Refresh the OHLCV feature pipeline before predicting."
+        )
     model, scaler, feature_names = _load_artifacts()
     model_input = _prepare_feature_frame(features, model, feature_names)
     try:
@@ -327,6 +344,9 @@ def create_prediction(session: Session) -> dict[str, Any]:
         direction = direction_by_id.get(class_id)
         if direction:
             probabilities_by_direction[direction] = float(probabilities[position])
+    probability_array = np.asarray(probabilities, dtype=float)
+    if probability_array.shape != (len(model_classes),) or not np.isfinite(probability_array).all() or probability_array.sum() <= 0:
+        raise ServiceUnavailable("Model returned invalid prediction probabilities")
     if not probabilities_by_direction:
         raise ServiceUnavailable("Model classes could not be mapped to DOWN/NEUTRAL/UP")
     direction = max(probabilities_by_direction, key=probabilities_by_direction.get)
@@ -364,6 +384,12 @@ def update_prediction_outcomes(session: Session) -> None:
             .limit(1)
         )
         if observed is None:
+            continue
+        max_delay = max(0, int(os.getenv("OUTCOME_MAX_DELAY_SECONDS", "900")))
+        delay = (_as_utc(observed.timestamp) - _as_utc(prediction.target_timestamp)).total_seconds()
+        if delay < 0 or delay > max_delay:
+            # Leave the record pending instead of scoring against a price hours
+            # or days after its target (for example, across a weekend closure).
             continue
         change = observed.close / prediction.reference_price - 1.0
         threshold = float(os.getenv("NEUTRAL_RETURN_THRESHOLD", "0.001"))

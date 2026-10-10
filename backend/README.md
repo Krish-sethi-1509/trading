@@ -8,6 +8,7 @@ process environment. Start PostgreSQL and run:
 
 ```sh
 pip install -r requirements.txt
+alembic -c ../alembic.ini upgrade head
 uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -42,16 +43,21 @@ scaler via `MODEL_PATH` and `SCALER_PATH`; in that case `MODEL_FEATURES_PATH`
 can provide a JSON list defining exact input feature order. The latest vector
 must either be stored in `price_history.feature_vector` or supplied through
 `FEATURES_CSV_PATH` from the engineered feature pipeline. Raw API quote polling
-does not manufacture the missing institutional features.
+does not manufacture missing OHLCV features. Inference rejects undated CSV rows
+and engineered features older than `FEATURE_MAX_AGE_SECONDS` (default 900 seconds);
+until fresh 5-minute OHLCV feature vectors are supplied, `/predict` returns HTTP
+503 instead of reusing a stale training row.
 
 The minute poll stores provider snapshots as flat OHLC price points because
 the live quote endpoint does not provide minute OHLCV. For chart-grade candles,
 populate `price_history` from a licensed intraday candle feed and persist
 engineered vectors from `feature_engineering.py`.
 
-`/accuracy-log` scores a due prediction using the first stored XAU/USD close at
-or after its target time and classifies the realized return with
-`NEUTRAL_RETURN_THRESHOLD`. Before records are available it responds with
+`/accuracy-log` is read-only. The single scheduler worker scores due predictions
+using the first stored XAU/USD close at or after the target, but only within
+`OUTCOME_MAX_DELAY_SECONDS` (default 900 seconds); later observations remain
+unscored. The realized return is classified with `NEUTRAL_RETURN_THRESHOLD`.
+Before records are available it responds with
 `status: "no_evaluated_predictions"`, `accuracy_percent: null`, and empty
 history arrays rather than treating a missing history as an error.
 
@@ -68,9 +74,9 @@ explanations and prohibit personalized or direct buy/sell/hold instructions.
 
 ## Integration smoke checks
 
-From the workspace directory run `python outputs/ml/test_pipeline.py` after
+From the repository root run `python ml/test_pipeline.py` after
 installing the backend requirements and configuring provider keys. It checks
 database connectivity read-only, loads the trained model, exercises feature
 calculations, and verifies API response contracts using an isolated temporary
 database. The deployment checklist is at
-`outputs/ml/DEPLOYMENT_CHECKLIST.md`.
+`ml/DEPLOYMENT_CHECKLIST.md`.

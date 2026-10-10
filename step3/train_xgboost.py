@@ -21,9 +21,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+from sklearn.metrics import (accuracy_score, balanced_accuracy_score, classification_report, confusion_matrix, f1_score, log_loss)
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.utils.class_weight import compute_sample_weight
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import TimeSeriesSplit
 from xgboost import XGBClassifier
 
 CLASS_NAMES = ["Down", "Neutral", "Up"]
@@ -32,6 +35,11 @@ ID_TO_CLASS = {value: key for key, value in CLASS_TO_ID.items()}
 NON_FEATURE_COLUMNS = {
     "timestamp", "target", "target_class", "future_close", "future_return",
     "label", "label_id", "bar_date", "id",
+    # Exclude non-stationary price levels; relative distances are engineered below.
+    "open", "high", "low", "close", "nearest_round_number", "round_number_distance",
+    "prior_liquidity_high", "prior_liquidity_low", "volume",
+    "dxy_close", "futures_close", "options_strike", "options_strike_distance",
+    "options_oi", "cot_net_long",
 }
 
 
@@ -62,7 +70,7 @@ def make_target(
         future.sort_values("future_timestamp"),
         left_on="target_timestamp",
         right_on="future_timestamp",
-        direction="nearest",
+        direction="forward",
         tolerance=tolerance,
     )
     aligned["future_return"] = aligned["future_close"] / aligned["close"] - 1.0
@@ -102,6 +110,92 @@ def make_pipeline(seed: int, estimators: int, max_depth: int, learning_rate: flo
     )
 
 
+
+
+def make_random_forest_pipeline(seed: int) -> Pipeline:
+    """Balanced RF candidate with train-only imputation."""
+    return Pipeline([
+        ("imputer", SimpleImputer(strategy="median", add_indicator=True)),
+        ("classifier", RandomForestClassifier(
+            n_estimators=500, max_features="sqrt", min_samples_leaf=5,
+            class_weight="balanced_subsample", random_state=seed, n_jobs=-1,
+        )),
+    ])
+
+
+def walk_forward_evaluation(
+    labeled: pd.DataFrame, features: pd.DataFrame, *, seed: int, estimators: int,
+    max_depth: int, learning_rate: float, n_splits: int = 3,
+) -> dict[str, object]:
+    """Compare XGBoost and balanced RF on identical purged expanding windows."""
+    labels = labeled["target_class"].map(CLASS_TO_ID).astype("int64")
+    fold_results = []
+    splitter = TimeSeriesSplit(n_splits=n_splits)
+    for fold_number, (candidate_train, test_positions) in enumerate(splitter.split(features), start=1):
+        test_start = labeled.iloc[test_positions[0]]["timestamp"]
+        train_mask = labeled.iloc[candidate_train]["target_timestamp"] < test_start
+        train_positions = candidate_train[train_mask.to_numpy()]
+        if len(train_positions) < 20:
+            raise ValueError(f"Walk-forward fold {fold_number} has fewer than 20 purged training rows")
+        columns = features.iloc[train_positions].columns[features.iloc[train_positions].notna().any()].tolist()
+        if not columns:
+            raise ValueError(f"Walk-forward fold {fold_number} has no observed training features")
+        x_train, x_test = features.iloc[train_positions][columns], features.iloc[test_positions][columns]
+        y_train, y_test = labels.iloc[train_positions], labels.iloc[test_positions]
+        observed = sorted(y_train.unique().tolist())
+        if len(observed) < 2:
+            raise ValueError(f"Walk-forward fold {fold_number} has fewer than two training classes")
+        encoded = y_train.map({class_id: index for index, class_id in enumerate(observed)})
+        weights = compute_sample_weight(class_weight="balanced", y=encoded)
+
+        xgb = make_pipeline(seed, estimators, max_depth, learning_rate)
+        xgb.set_params(xgboost__num_class=len(observed))
+        xgb.fit(x_train, encoded, xgboost__sample_weight=weights)
+        xgb_encoded = xgb.predict(x_test).astype(int)
+        xgb_pred = np.asarray([observed[index] for index in xgb_encoded], dtype=int)
+        xgb_prob = np.zeros((len(x_test), len(CLASS_NAMES)), dtype=float)
+        raw = xgb.predict_proba(x_test)
+        for j, class_id in enumerate(observed):
+            xgb_prob[:, class_id] = raw[:, j]
+        xgb_prob = np.clip(xgb_prob, 1e-15, 1.0)
+        xgb_prob /= xgb_prob.sum(axis=1, keepdims=True)
+
+        rf = make_random_forest_pipeline(seed)
+        rf.fit(x_train, y_train)
+        rf_pred = rf.predict(x_test).astype(int)
+        rf_prob = np.zeros((len(x_test), len(CLASS_NAMES)), dtype=float)
+        raw = rf.predict_proba(x_test)
+        for j, class_id in enumerate(rf.named_steps["classifier"].classes_):
+            rf_prob[:, int(class_id)] = raw[:, j]
+        rf_prob = np.clip(rf_prob, 1e-15, 1.0)
+        rf_prob /= rf_prob.sum(axis=1, keepdims=True)
+
+        def score(pred, probs):
+            return {
+                "accuracy": float(accuracy_score(y_test, pred)),
+                "macro_f1": float(f1_score(y_test, pred, labels=[0, 1, 2], average="macro", zero_division=0)),
+                "balanced_accuracy": float(balanced_accuracy_score(y_test, pred)),
+                "log_loss": float(log_loss(y_test, probs, labels=[0, 1, 2])),
+            }
+        fold_results.append({
+            "fold": fold_number, "train_rows": int(len(train_positions)),
+            "purged_rows": int(len(candidate_train) - len(train_positions)),
+            "test_rows": int(len(test_positions)),
+            "xgboost": score(xgb_pred, xgb_prob),
+            "random_forest": score(rf_pred, rf_prob),
+        })
+    aggregate = {}
+    for candidate in ("xgboost", "random_forest"):
+        aggregate[candidate] = {
+            "mean_accuracy": float(np.mean([fold[candidate]["accuracy"] for fold in fold_results])),
+            "mean_macro_f1": float(np.mean([fold[candidate]["macro_f1"] for fold in fold_results])),
+            "mean_balanced_accuracy": float(np.mean([fold[candidate]["balanced_accuracy"] for fold in fold_results])),
+            "mean_log_loss": float(np.mean([fold[candidate]["log_loss"] for fold in fold_results])),
+        }
+    return {"fold_count": len(fold_results), **aggregate, "folds": fold_results}
+
+
+
 def train(
     data: pd.DataFrame,
     *,
@@ -133,9 +227,13 @@ def train(
         and pd.api.types.is_numeric_dtype(labeled[column])
     ]
     features = labeled[candidates].replace([np.inf, -np.inf], np.nan)
-    # Remove features with no observed values in the full historical sample;
-    # all remaining imputation/scaling is learned inside the training pipeline.
-    feature_columns = features.columns[features.notna().any()].tolist()
+    all_features = features.copy()
+    # Select features using only the pre-test training window; learned imputation
+    # and scaling are then fit inside each model pipeline.
+    initial_train_end = int(len(labeled) * (1.0 - test_size))
+    feature_columns = features.iloc[:initial_train_end].columns[
+        features.iloc[:initial_train_end].notna().any()
+    ].tolist()
     features = features[feature_columns]
     if not feature_columns:
         raise ValueError("No numeric feature columns found in the input")
@@ -144,40 +242,142 @@ def train(
     split_at = int(len(labeled) * (1.0 - test_size))
     if split_at <= 0 or split_at >= len(labeled):
         raise ValueError("Chronological split produced an empty train or test set")
-    x_train, x_test = features.iloc[:split_at], features.iloc[split_at:]
-    y_train, y_test = labels.iloc[:split_at], labels.iloc[split_at:]
+    test_start = labeled.iloc[split_at]["timestamp"]
+    # Purge training labels whose forward outcome window reaches the test period.
+    train_mask = labeled.iloc[:split_at]["target_timestamp"] < test_start
+    train_positions = np.flatnonzero(train_mask.to_numpy())
+    if len(train_positions) < 20:
+        raise ValueError("Purging overlapping labels leaves fewer than 20 training rows")
+    x_train, x_test = features.iloc[train_positions], features.iloc[split_at:]
+    y_train, y_test = labels.iloc[train_positions], labels.iloc[split_at:]
     if y_train.nunique() < 2:
-        raise ValueError("Training partition contains fewer than two target classes")
+        raise ValueError("Purged training partition contains fewer than two target classes")
 
     observed_classes = sorted(y_train.unique().tolist())
     encoded_train = y_train.map({class_id: index for index, class_id in enumerate(observed_classes)})
-    pipeline = make_pipeline(seed, estimators, max_depth, learning_rate)
-    pipeline.set_params(xgboost__num_class=len(observed_classes))
-    pipeline.fit(x_train, encoded_train)
-    encoded_predictions = pipeline.predict(x_test).astype(int)
-    predicted = np.asarray([observed_classes[index] for index in encoded_predictions], dtype=int)
-    matrix = confusion_matrix(y_test, predicted, labels=[0, 1, 2])
-    report = classification_report(
-        y_test,
-        predicted,
-        labels=[0, 1, 2],
-        target_names=CLASS_NAMES,
-        output_dict=True,
-        zero_division=0,
+    metrics_cv = walk_forward_evaluation(
+        labeled, all_features, seed=seed, estimators=estimators,
+        max_depth=max_depth, learning_rate=learning_rate,
     )
+    selected_model = max(("xgboost", "random_forest"), key=lambda name: metrics_cv[name]["mean_macro_f1"])
+    if selected_model == "random_forest":
+        pipeline = make_random_forest_pipeline(seed)
+        pipeline.fit(x_train, y_train)
+        predicted = pipeline.predict(x_test).astype(int)
+        observed_classes = [int(value) for value in pipeline.named_steps["classifier"].classes_]
+        probabilities = np.zeros((len(x_test), len(CLASS_NAMES)), dtype=float)
+        raw_probabilities = pipeline.predict_proba(x_test)
+        for column_index, class_id in enumerate(observed_classes):
+            probabilities[:, class_id] = raw_probabilities[:, column_index]
+    else:
+        sample_weights = compute_sample_weight(class_weight="balanced", y=encoded_train)
+        pipeline = make_pipeline(seed, estimators, max_depth, learning_rate)
+        pipeline.set_params(xgboost__num_class=len(observed_classes))
+        pipeline.fit(x_train, encoded_train, xgboost__sample_weight=sample_weights)
+        encoded_predictions = pipeline.predict(x_test).astype(int)
+        predicted = np.asarray([observed_classes[index] for index in encoded_predictions], dtype=int)
+        probabilities = np.zeros((len(x_test), len(CLASS_NAMES)), dtype=float)
+        raw_probabilities = pipeline.predict_proba(x_test)
+        for column_index, class_id in enumerate(observed_classes):
+            probabilities[:, class_id] = raw_probabilities[:, column_index]
+    probabilities = np.clip(probabilities, 1e-15, 1.0)
+    probabilities /= probabilities.sum(axis=1, keepdims=True)
+    report = classification_report(
+        y_test, predicted, labels=[0, 1, 2], target_names=CLASS_NAMES,
+        output_dict=True, zero_division=0,
+    )
+    matrix = confusion_matrix(y_test, predicted, labels=[0, 1, 2])
+    majority_class = int(y_train.value_counts().idxmax())
+    majority_predictions = np.full(len(y_test), majority_class, dtype=int)
+
+    from sklearn.linear_model import LogisticRegression
+    logistic = Pipeline([
+        ("imputer", SimpleImputer(strategy="median", add_indicator=True)),
+        ("scaler", StandardScaler()),
+        ("classifier", LogisticRegression(max_iter=1000, class_weight="balanced", random_state=seed)),
+    ])
+    logistic.fit(x_train, y_train)
+    logistic_classes = logistic.named_steps["classifier"].classes_
+    logistic_probabilities = np.zeros((len(x_test), len(CLASS_NAMES)), dtype=float)
+    raw_logistic_probabilities = logistic.predict_proba(x_test)
+    for column_index, class_id in enumerate(logistic_classes):
+        logistic_probabilities[:, int(class_id)] = raw_logistic_probabilities[:, column_index]
+    logistic_probabilities = np.clip(logistic_probabilities, 1e-15, 1.0)
+    logistic_probabilities /= logistic_probabilities.sum(axis=1, keepdims=True)
+    logistic_predictions = logistic_probabilities.argmax(axis=1)
+
+    # Persistence predicts that the most recent horizon-sized move continues.
+    history = labeled[["timestamp", "close"]].rename(
+        columns={"timestamp": "past_bar_timestamp", "close": "past_close"}
+    )
+    requests = labeled[["timestamp", "close"]].copy()
+    requests["lookback_timestamp"] = requests["timestamp"] - pd.Timedelta(hours=horizon_hours)
+    persistence = pd.merge_asof(
+        requests.sort_values("lookback_timestamp"),
+        history.sort_values("past_bar_timestamp"),
+        left_on="lookback_timestamp",
+        right_on="past_bar_timestamp",
+        direction="backward",
+        tolerance=pd.Timedelta(minutes=label_tolerance_minutes),
+    ).sort_values("timestamp")
+    persistence_return = persistence["close"] / persistence["past_close"] - 1.0
+    persistence_class = np.select(
+        [persistence_return < -neutral_threshold, persistence_return > neutral_threshold],
+        [0, 2],
+        default=1,
+    ).astype(int)
+    persistence_predictions = persistence_class[split_at:]
+    persistence_predictions[persistence["past_close"].iloc[split_at:].isna().to_numpy()] = majority_class
+
+    def summarize(y_true, y_pred, probs=None):
+        result = {
+            "accuracy": float(accuracy_score(y_true, y_pred)),
+            "macro_f1": float(f1_score(y_true, y_pred, labels=[0, 1, 2], average="macro", zero_division=0)),
+            "balanced_accuracy": float(balanced_accuracy_score(y_true, y_pred)),
+        }
+        if probs is not None:
+            one_hot = np.eye(len(CLASS_NAMES))[np.asarray(y_true, dtype=int)]
+            confidence = probs.max(axis=1)
+            correct = (np.asarray(y_pred) == np.asarray(y_true)).astype(float)
+            ece = 0.0
+            for lower in np.linspace(0.0, 0.9, 10):
+                upper = lower + 0.1
+                mask = (confidence >= lower) & (confidence < upper if upper < 1.0 else confidence <= upper)
+                if mask.any():
+                    ece += float(mask.mean() * abs(correct[mask].mean() - confidence[mask].mean()))
+            result.update({
+                "log_loss": float(log_loss(y_true, probs, labels=[0, 1, 2])),
+                "multiclass_brier": float(np.mean(np.sum((probs - one_hot) ** 2, axis=1))),
+                "expected_calibration_error_10_bins": ece,
+            })
+        return result
+
     metrics = {
-        "accuracy": float(accuracy_score(y_test, predicted)),
+        **summarize(y_test, predicted, probabilities),
+        "baselines": {
+            "majority_class": {"class": ID_TO_CLASS[majority_class], **summarize(y_test, majority_predictions)},
+            "logistic_regression": summarize(y_test, logistic_predictions, logistic_probabilities),
+            "persistence": summarize(y_test, persistence_predictions),
+        },
         "train_rows": int(len(x_train)),
+        "purged_rows": int(split_at - len(train_positions)),
         "test_rows": int(len(x_test)),
         "feature_count": int(len(feature_columns)),
     }
+    metrics["selected_model"] = selected_model
+    metrics["walk_forward"] = metrics_cv
     # Metadata used by inference so it applies exactly the same feature order.
+    pipeline.gold_model_type_ = selected_model
     pipeline.gold_feature_columns_ = feature_columns
     pipeline.gold_class_names_ = CLASS_NAMES
     pipeline.gold_trained_class_ids_ = observed_classes
     results = labeled.iloc[split_at:][["timestamp", "close", "future_close", "future_return", "target_class"]].copy()
     results["predicted_class"] = [ID_TO_CLASS[int(value)] for value in predicted]
     results["predicted_class_id"] = predicted
+    results["selected_model"] = selected_model
+    results["majority_baseline_class"] = [ID_TO_CLASS[value] for value in majority_predictions]
+    results["logistic_regression_class"] = [ID_TO_CLASS[value] for value in logistic_predictions]
+    results["persistence_class"] = [ID_TO_CLASS[value] for value in persistence_predictions]
     results.index = range(len(results))
     details = pd.DataFrame(report).transpose()
     return pipeline, results, details, matrix, metrics
@@ -243,6 +443,7 @@ def main() -> int:
     print("Chronological holdout confusion matrix (rows = actual, columns = predicted):")
     print(matrix_frame.to_string())
     print(f"\nAccuracy: {metrics['accuracy']:.4f}")
+    print(f"Selected model: {metrics['selected_model']} (walk-forward macro-F1 selection)")
     print(f"Train rows: {metrics['train_rows']}; test rows: {metrics['test_rows']}; features: {metrics['feature_count']}")
     print(f"Artifacts saved to {output_dir.resolve()}")
     return 0

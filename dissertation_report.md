@@ -4,16 +4,16 @@
 
 **Author:** [Student name]  
 **Programme / Institution:** [Programme and institution]  
-**Date:** 29 September 2026  
-**Status:** System and methodology draft; empirical evaluation pending
+**Date:** 10 October 2026  
+**Status:** Six-month historical evaluation completed in GitHub Actions run 31; further multi-regime and untouched-period evaluation remains pending
 
-> **Evidence note.** This draft describes the implementation currently present in the project repository. At the time of writing, no historical feature dataset, fitted model, test predictions, confusion matrix, classification report, or metrics JSON is present. Accordingly, this report makes no quantitative claim about predictive accuracy or superiority. Replace the marked evaluation fields only after running the training pipeline and validating its test design.
+> **Evidence note.** GitHub Actions run 31 completed the corrected six-month Twelve Data download, coverage validation, feature engineering, training, walk-forward evaluation, and artifact upload. The verified holdout achieved 55.18% accuracy, 0.5467 macro-F1, and 0.5392 balanced accuracy; Random Forest was selected by walk-forward macro-F1. This is a single six-month evaluation and does not establish stable forecasting skill, an 85% accuracy level, or economic profitability. The report records the run’s measured results below; obtain additional regimes and a later untouched test period before making stronger claims.
 
 ## Abstract
 
 This project develops a full-stack research prototype for classifying the four-hour direction of the XAU/USD spot price as **Up**, **Down**, or **Neutral**. The motivation is that gold prices respond to interacting market and macroeconomic conditions—including real interest rates, the US dollar, trading-session liquidity, and price and volume dynamics—while short-horizon returns are noisy and potentially non-stationary. The proposed system combines intraday gold OHLCV data with lagged US 10-year Treasury Inflation-Protected Securities (TIPS) yield and US Dollar Index (DXY) observations, then derives a set of technical and institutional-mechanics-inspired features. These include London–New York overlap volume-weighted average price (VWAP) bands, rolling liquidity-sweep proxies, a real-yield/spot divergence measure, average true range, candle momentum, fair-value-gap proxies, and optional basis, options open-interest, Commitments of Traders (COT), and macro-release features.
 
-The classification model is an XGBoost multiclass gradient-boosted tree pipeline. Labels are based on the simple return between a bar’s close and a close near four hours later, with a configurable neutral band. A chronological holdout is specified to represent a forward-in-time evaluation. The repository also contains a FastAPI service backed by PostgreSQL, a React dashboard using Lightweight Charts, and a query-time web-grounded macroeconomic chat assistant. Because model artifacts and held-out evaluation outputs are not currently available, the present report documents the model specification and evaluation protocol but does not assert measured predictive performance. The system is positioned as an educational quantitative decision-support prototype, not an automated trading system or a source of personalized financial advice. Its principal research limitations include proxy measurement, incomplete direct market microstructure data, possible temporal leakage around overlapping labels, execution frictions, and regime change.
+The training workflow compares a class-weighted XGBoost multiclass gradient-boosted tree pipeline with a class-balanced Random Forest using purged expanding-window validation; logistic regression is an additional holdout baseline. Labels are based on the simple return between a bar’s close and a close near four hours later, with a configurable neutral band. A chronological holdout is specified to represent a forward-in-time evaluation. The repository also contains a FastAPI service backed by PostgreSQL, a React dashboard with an embedded TradingView chart, and a query-time web-grounded macroeconomic chat assistant. The saved legacy holdout achieved 37.0% accuracy and was heavily biased toward Up predictions; its short sample and unpurged split do not establish forecasting skill. The system is positioned as an educational quantitative decision-support prototype, not an automated trading system or a source of personalized financial advice. Its principal research limitations include proxy measurement, incomplete direct market microstructure data, possible temporal leakage around overlapping labels, execution frictions, and regime change.
 
 **Keywords:** XAU/USD, gold, machine learning, XGBoost, real yields, VWAP, liquidity, decision support, financial time series
 
@@ -94,7 +94,7 @@ The architecture is multi-layered in its feature design, but feature availabilit
 
 The feature-engineering interface accepts timestamped intraday gold OHLCV data and optional timestamped files for TIPS yield, DXY, futures, COT positioning, options strike/open interest, and macro-release times. Timestamps are parsed as UTC, rows are sorted, and duplicate timestamps are reduced to the last record. Daily TIPS and DXY observations are shifted by one day and joined backward to the intraday timeline. The intended primary input is an intraday series because the session-overlap VWAP cannot be meaningfully reconstructed from daily bars.
 
-Before empirical use, the data appendix should report provider, symbol definition, bid/ask or mid-price convention, sampling interval, timezone, missing-data policy, market closures, sample dates, and row counts. It should also distinguish spot from futures prices and describe the origin and meaning of any volume field. No source dataset is currently available in the repository, so these details remain to be supplied from the actual data run.
+Before empirical use, the data appendix should report provider, symbol definition, bid/ask or mid-price convention, sampling interval, timezone, missing-data policy, market closures, sample dates, and row counts. It should also distinguish spot from futures prices and describe the origin and meaning of any volume field. The checked-in short sample contains XAU/USD 5-minute bars and TIPS observations. A reproducible historical downloader now fetches Dukascopy XAU/USD BID and ASK minute bars, constructs midpoint OHLC, and resamples to five minutes. This is a single broker feed rather than a consolidated OTC market source; its volume field is a broker-feed activity proxy, not exchange-traded or consolidated gold volume. A six-month historical experiment has been added to GitHub Actions; report its resulting dates, row count, and evaluation metrics only after that workflow completes.
 
 ### 3.2 Feature construction
 
@@ -138,56 +138,55 @@ The target uses the future close near (t+4\) hours and its simple return from th
 R_{t,4h}=\frac{C_{t+4h}}{C_t}-1.
 \]
 
-With the default neutral threshold \(\tau=0.001\), observations are labeled Down if (R_{t,4h}<-\tau), Up if (R_{t,4h}>\tau), and Neutral otherwise. This threshold is 0.10% in absolute return. The implementation aligns to the nearest available bar within a configurable five-minute tolerance. Because nearest-neighbor alignment can select a bar slightly before the nominal target timestamp as well as after it, this should be changed or carefully audited for the final experiment; a strictly forward-only alignment or an explicitly defined bar index is preferable.
+With the default neutral threshold \(\tau=0.001\), observations are labeled Down if (R_{t,4h}<-\tau), Up if (R_{t,4h}>\tau), and Neutral otherwise. This threshold is 0.10% in absolute return. The corrected implementation aligns only to the first available bar at or after the target timestamp, within a configurable five-minute tolerance. This removes the previous possibility of labeling against a pre-target close.
 
 ### 3.4 Model and pipeline
 
 The training script defines a scikit-learn pipeline consisting of median imputation with missingness indicators, `StandardScaler`, and `XGBClassifier`. The default XGBoost configuration uses `multi:softprob`, multiclass log loss, 500 estimators, maximum depth 5, learning rate 0.03, row subsampling 0.85, column subsampling 0.85, L2 regularization 1.0, random seed 42, all available CPU threads, and histogram tree construction. The pipeline stores the training feature order and class mapping for inference.
 
-These values are code defaults, not the result of a reported hyperparameter search. Scaling is included for a consistent preprocessing pipeline, although tree split decisions generally do not require standardized numeric inputs. Hyperparameter selection should be done using only training-period data and a time-ordered validation design. The present script performs a chronological train/test split, but it does not implement a separate validation window, nested temporal tuning, purging, or an embargo for overlapping four-hour labels.
+These values are code defaults, not the result of a reported hyperparameter search. Scaling is included for a consistent preprocessing pipeline, although tree split decisions generally do not require standardized numeric inputs. Hyperparameter selection should be done using only training-period data and a time-ordered validation design. The corrected script performs a chronological holdout and three expanding-window walk-forward folds. It selects features using only each training window and purges training labels whose forward outcome windows reach a test block. It does not tune hyperparameters; a larger, multi-regime history remains necessary before final dissertation claims.
 
-The pipeline removes features with no observed values in the complete labeled sample before the split. This uses information about missingness in the test period, albeit not test target values. For a strict evaluation, feature selection and preprocessing decisions should be learned only within the training folds. Furthermore, the 4-hour labels can overlap heavily when bars are more frequent than four hours; samples around the train/test boundary can therefore share portions of their forward outcome interval. A gap/purge at the split boundary and a walk-forward evaluation are recommended before treating the holdout as a definitive estimate.
+The corrected pipeline selects non-empty features using the training partition and purges training labels whose forward outcome windows reach the test period. It also adds majority-class, four-hour persistence, and regularized logistic-regression baselines, alongside macro-F1, balanced accuracy, log loss, multiclass Brier score, and a ten-bin calibration error. The evaluation also runs three expanding-window walk-forward folds, purging overlapping labels at each fold boundary. Because each fold trains only on earlier observations, it does not use future samples; a separate embargo is not needed for this expanding-window design. A larger, multi-regime history and repeated evaluation remain necessary before treating scores as stable.
 
 ### 3.5 Evaluation protocol and metrics
 
-The configured protocol holds out the most recent 20% of labeled samples and trains on the earlier 80%. Confusion-matrix rows correspond to actual classes and columns to predicted classes, ordered Down, Neutral, Up. The training script exports the confusion matrix, per-class precision, recall, F1-score, support, aggregate accuracy, test predictions, and a JSON summary. Accuracy is not sufficient where class frequencies are imbalanced; the final report should include per-class precision/recall/F1, macro-F1, balanced accuracy, class support, and a simple baseline such as majority-class prediction. Given probabilistic outputs, calibration and log loss or Brier score are also useful. A strategy-level backtest would need to incorporate spread, fees, slippage, and a clear position/exit rule, and is outside the current classifier evaluation.
+The corrected protocol reports a latest-20% chronological holdout and three expanding-window walk-forward folds; each training window is purged so its forward label intervals end before the associated test block. Confusion-matrix rows represent actual classes and columns predicted classes, ordered Down, Neutral, Up. The training script exports per-class precision, recall, F1-score, support, macro-F1, balanced accuracy, log loss, multiclass Brier score, ten-bin expected calibration error, and test predictions. It also evaluates training-derived majority, four-hour persistence, and logistic-regression baselines on the same test dates. A strategy-level backtest would need to incorporate spread, fees, slippage, and a clear position/exit rule, and is outside the current classifier evaluation.
 
 ## 4. Model Development and Evaluation
 
-### 4.1 Available empirical results
+### 4.1 Run 31: six-month evaluation
 
-No training artifacts are present in the project workspace as of the report date. Therefore, actual scores cannot be responsibly reported yet.
+GitHub Actions run 31 completed the full Twelve Data historical evaluation on the feature branch. The requested date range was 11 April–8 October 2026. The downloaded series began at 2026-04-11 00:00 UTC and ended at 2026-10-08 23:55 UTC, with 52,127 five-minute bars. The coverage validator checked all 129 expected weekdays, required at least 200 bars per weekday, found no missing or short weekdays, confirmed both endpoints, and marked coverage complete. The weekday reference was 35,604 bars; the larger observed count includes additional provider timestamps outside that weekday-only expectation.
 
-| Evaluation item | Current status | Required evidence before final submission |
-|---|---|---|
-| Sample period and usable row count | Not available | Data manifest and labeled row counts |
-| Train/test sizes and class balance | Not available | `metrics.json` plus class support in report |
-| Confusion matrix (Down / Neutral / Up) | Not available | `confusion_matrix.csv` from a completed run |
-| Per-class precision, recall, and F1 | Not available | `classification_report.csv` |
-| Overall accuracy and macro-F1 | Not available | Holdout metrics, with exact split dates |
-| Majority-class baseline | Not implemented in training script | Same split evaluated with a training majority classifier |
-| Calibration / probabilistic score | Not available | Reliability assessment and log loss or Brier score |
-| Economic performance after costs | Not evaluated | Separate, pre-specified execution-aware backtest |
+The experiment used 41,615 training rows, purged 48 boundary rows, and evaluated 10,416 chronological holdout rows using 26 features. The selected model was Random Forest. The exact uploaded outputs are retained in the [Run 31 GitHub Actions artifact](https://github.com/Krish-sethi-1509/trading/actions/runs/38045344582).
 
-The appropriate dissertation statement at this stage is that the model has been specified and the evaluation pipeline has been implemented, while empirical predictive performance remains unverified. The output labels “UP”, “DOWN”, and “NEUTRAL” must not be presented as a validated forecasting capability until the data run, baseline comparison, and leakage review are complete.
+### 4.2 Holdout metrics and confusion matrix
 
-### 4.2 Confusion matrix interpretation
+| Metric | Holdout result |
+|---|---:|
+| Accuracy | 55.18% |
+| Macro-F1 | 0.5467 |
+| Balanced accuracy | 0.5392 |
+| Log loss | 0.8543 |
+| Multiclass Brier score | 0.5093 |
+| Expected calibration error (10 bins) | 0.0756 |
 
-When available, the matrix should be reported numerically with actual classes as rows and predicted classes as columns. Diagonal cells are correct classifications. Off-diagonal cells expose direction errors—for example, a true Down observation predicted Up—and Neutral-class behavior. Precision for class (k) is (TP_k/(TP_k+FP_k)), while recall is (TP_k/(TP_k+FN_k)). Precision measures the fraction of predictions for a class that were correct; recall measures the fraction of actual class observations recovered. In a three-class setting, both should be reported per class rather than reduced to a single undifferentiated score.
+The confusion matrix (actual rows, predicted columns; class order Down, Neutral, Up) was `[[1926, 95, 1287], [959, 2634, 636], [1644, 47, 1188]]`. Errors remain substantial across all classes. Accuracy alone is not an adequate summary; macro-F1 and balanced accuracy reflect per-class performance more fairly, while log loss, Brier score, and calibration error describe probabilistic predictions.
 
-### 4.3 Baseline comparison
+### 4.3 Baseline comparison and walk-forward results
 
-The current training script does not compute a baseline. A minimum benchmark is a majority-class classifier fitted on the training partition and evaluated on the identical test dates. A stronger benchmark is a price-only feature model using a small, predeclared set of lagged returns and volatility inputs. Optional additional baselines include regularized multinomial logistic regression and a simple persistence/neutral rule. The proposed multi-layer feature model should be compared on identical observations, labels, split boundaries, and metrics. Only then can any incremental value of macro or liquidity features be evaluated. Feature ablation—price-only, price plus macro, and full available feature set—would help determine whether the added complexity contributes out of sample.
+All holdout methods use the same 10,416 test rows.
 
-### 4.4 Recommended final reporting table
+| Model | Accuracy | Balanced accuracy | Macro-F1 | Log loss |
+|---|---:|---:|---:|---:|
+| Training-majority (Neutral) | 40.60% | 0.3333 | 0.1925 | — |
+| Four-hour persistence | 49.37% | 0.4675 | 0.4675 | — |
+| Logistic regression | 51.90% | 0.5225 | 0.4350 | 0.9052 |
+| Random Forest (selected) | 55.18% | 0.5392 | 0.5467 | 0.8543 |
 
-Populate this table from actual artifacts; do not fill cells by visual estimate.
+Across three expanding-window folds, Random Forest averaged 55.09% accuracy, 0.5413 balanced accuracy, 0.5462 macro-F1, and 0.8543 log loss. XGBoost averaged 54.56% accuracy, 0.5293 balanced accuracy, 0.5318 macro-F1, and 0.9759 log loss. Random Forest’s holdout results exceed these baselines on this evaluation, but the evidence is limited to this six-month sample and split. It does not demonstrate generalization to other market regimes, a future untouched period, or profitable trading after costs. The result is also well below 85% accuracy; no claim of that level is supported.
 
-| Model | Accuracy | Balanced accuracy | Macro-F1 | Down P/R/F1 | Neutral P/R/F1 | Up P/R/F1 |
-|---|---:|---:|---:|---:|---:|---:|
-| Majority-class baseline | Pending | Pending | Pending | Pending | Pending | Pending |
-| Price-only baseline | Pending | Pending | Pending | Pending | Pending | Pending |
-| Full available feature model | Pending | Pending | Pending | Pending | Pending | Pending |
+The previous short-sample metrics (including the 37% legacy result and Run 90 figures) are superseded for this experiment and should not be presented as Run 31 results. Run 31 does not itself test the deployed API against a changing live market; live-serving parity and provider-failure behavior should be verified separately.
 
 ## 5. System Architecture
 
@@ -195,7 +194,7 @@ Populate this table from actual artifacts; do not fill cells by visual estimate.
 
 The research workflow begins with external market and macroeconomic data. Historical gold OHLCV, TIPS yields, and DXY values are transformed by the feature-engineering module and passed to the model-training script. The fitted preprocessing/model pipeline is serialized as a joblib artifact. Inference uses FastAPI services to load features and the model, return a directional class and confidence, and store prediction records in PostgreSQL. SQLAlchemy models represent price history and prediction logs. APScheduler is configured to refresh live-price data every minute, generate predictions every four hours, and periodically score predictions against later prices.
 
-The current implementation should be understood as an MVP integration, not yet a fully reconciled research-to-production feed. In particular, the historical fetcher and intraday feature pipeline have different data granularity requirements, and the live-price polling path can store quote snapshots rather than exchange-quality OHLCV candles. Chart-history integrity and model-feature parity must be verified before deployment claims are made.
+The serving path fetches completed five-minute XAU/USD candles from Twelve Data and applies the same feature builder used by the training pipeline. It also fetches DFII10 observations from FRED and applies the documented one-day availability lag. Minute quote snapshots remain flat display and outcome observations; they are not used as model OHLCV input. OTC spot volume may be unavailable, in which case volume-dependent features remain missing and are imputed by the fitted pipeline. The separate daily PostgreSQL ingestion is a research-data path and is not the live prediction source. Optional DXY, futures, options, COT, and event-calendar features are not currently supplied at serving time.
 
 ### 5.2 Backend API
 
@@ -215,7 +214,7 @@ The chat service performs query-time retrieval using Tavily or Serper news searc
 
 Financial time series are non-stationary: volatility, monetary regimes, market participants, liquidity, and relationships among gold, yields, and the dollar can change. Rolling features may adapt to recent observations but cannot guarantee future stability. Model performance should be monitored over time, tested across distinct regimes, and recalibrated only using a documented process. Confidence scores from `predict_proba()` are model class probabilities; absent calibration analysis they must not be interpreted as empirically calibrated probabilities of success.
 
-Potential leakage arises from target alignment, overlapping four-hour label horizons, test-aware removal of wholly missing features, revised macro series, and timestamps that do not reflect actual publication availability. A robust final experiment should use point-in-time data, forward-only labels, a boundary purge or gap at least as long as the forecast horizon, rolling-origin or walk-forward evaluation, and a final untouched test period. All transformations and feature selection should be fitted using training data only. Hyperparameter selection must not use the final test set.
+Temporal leakage controls now use forward-only target matching with a five-minute tolerance, purge training labels whose outcome window overlaps a test boundary, and compare models in expanding chronological folds. Feature availability is determined from training rows and preprocessing is fit within each model pipeline. A final untouched period and point-in-time macro vintage data are still needed for a stronger study; availability lags based on date labels do not by themselves prove the provider’s actual publication time.
 
 Data-source limitations include heterogeneous OTC spot quotes, uncertain volume meaning, missing optional inputs, as-of joins with publication lags, rate limits, stale fallback quotes, and imperfect alignment between spot and COMEX futures. Options open interest and COT reports have their own publication delays and represent different participant universes. The system should store source, observation time, retrieval time, and staleness metadata and fail visibly when essential inputs are missing.
 
@@ -235,7 +234,7 @@ The dashboard and assistant are designed for educational research and decision s
 
 This project specifies an end-to-end prototype for four-hour XAU/USD direction classification, combining price-action features with lagged macroeconomic information and rule-based liquidity/session proxies. It pairs the modeling workflow with a FastAPI/PostgreSQL backend, React visualization dashboard, and a web-grounded assistant intended to explain macroeconomic context without making personalized trading recommendations. The architecture is suitable as a research MVP, while the current evidence does not yet establish forecasting performance.
 
-The next research priorities are to obtain and document synchronized intraday data; verify point-in-time feature availability and model/data parity; correct target alignment to be strictly forward-looking; add a temporal gap or purge; run baselines and ablations; report class-wise metrics and calibration; evaluate robustness across time regimes; and conduct a separate cost-aware backtest only after predefining a decision policy. Direct options, futures, and financing inputs would be required before making claims about dealer gamma, FX swaps, or central-bank basis. The dissertation’s central conclusion should ultimately be determined by those experiments, including the possibility that the multi-layer model does not outperform simple baselines.
+The completed Run 31 provides a reproducible six-month result with forward-only target matching, purged chronological evaluation, baseline comparisons, and calibration metrics. Random Forest outperformed the included baselines on this holdout, but its 55.18% accuracy and limited date span do not establish robust forecasting skill and do not support an 85% accuracy claim. Next steps are to repeat the evaluation on additional market regimes and a later untouched period, verify serving behavior against changing live data, perform feature ablations and sensitivity analysis, and assess any pre-specified strategy with spread, fees, slippage, and execution constraints. Direct options, futures, and financing inputs would be required before making claims about dealer gamma, FX swaps, or central-bank basis.
 
 ## References
 

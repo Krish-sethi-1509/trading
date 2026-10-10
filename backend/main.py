@@ -7,14 +7,17 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import Integer, func, select
 from sqlalchemy.orm import Session
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
-from database import engine, get_db
-from models import Base, PredictionLog, PriceHistory
+from database import get_db
+from models import PredictionLog, PriceHistory
 from services import (
     ServiceUnavailable,
     active_session,
@@ -54,13 +57,14 @@ class ChatRequest(BaseModel):
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # For a dissertation MVP this creates tables on first start. Existing
-    # deployments should use Alembic migrations for schema changes.
-    Base.metadata.create_all(bind=engine)
+    # Schema changes are applied by Alembic before the API process starts.
     yield
 
 
+limiter = Limiter(key_func=get_remote_address, headers_enabled=True)
 app = FastAPI(title="Gold Direction Prediction API", version="1.0.0", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 origins = [
     value.strip()
     for value in os.getenv(
@@ -87,15 +91,16 @@ def health() -> dict[str, str]:
 
 
 @app.post("/chat")
-async def chat(request: ChatRequest) -> dict:
+@limiter.limit("5/minute")
+async def chat(request: Request, chat_request: ChatRequest) -> dict:
     """Retrieve current macro/news context and return a cited, guarded answer."""
     from starlette.concurrency import run_in_threadpool
 
     try:
         return await run_in_threadpool(
             answer_query,
-            request.query,
-            [message.model_dump() for message in request.history],
+            chat_request.query,
+            [message.model_dump() for message in chat_request.history],
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -134,7 +139,8 @@ async def market_news(kind: str = Query(default="news", pattern="^(news|events)$
 
 
 @app.get("/price/live")
-def live_price() -> dict:
+@limiter.limit("30/minute")
+def live_price(request: Request) -> dict:
     """Fetch a fresh quote and return its observed bid/ask spread if available."""
     try:
         quote = refresh_live_price()
@@ -230,7 +236,8 @@ def _aggregate_history(rows: list[PriceHistory], interval: str) -> list[dict]:
 
 
 @app.post("/predict")
-def predict(db: Session = Depends(get_db)) -> dict[str, str | float]:
+@limiter.limit("10/minute")
+def predict(request: Request, db: Session = Depends(get_db)) -> dict[str, str | float]:
     try:
         return create_prediction(db)
     except ServiceUnavailable as exc:
@@ -243,8 +250,7 @@ def accuracy_log(
     limit: int = Query(default=50, ge=1, le=500),
     db: Session = Depends(get_db),
 ) -> dict:
-    """Update due outcomes and return running scored accuracy plus recent rows."""
-    update_prediction_outcomes(db)
+    """Return running scored accuracy plus recent rows; scoring is scheduler-owned."""
     total, correct = db.execute(
         select(
             func.count(PredictionLog.id),

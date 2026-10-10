@@ -21,7 +21,7 @@ import requests
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
-from models import Base, EconomicObservation, MarketBar
+from models import EconomicObservation, MarketBar
 
 TWELVE_DATA_URL = "https://api.twelvedata.com/time_series"
 FRED_OBSERVATIONS_URL = "https://api.stlouisfed.org/fred/series/observations"
@@ -184,7 +184,6 @@ def fetch_and_store(start: date, end: date) -> dict[str, int]:
     tips = fetch_fred_tips(start, end, fred_key)
 
     engine = create_engine(database_url, pool_pre_ping=True)
-    Base.metadata.create_all(engine)
     with Session(engine) as session, session.begin():
         counts = {
             "XAU/USD": _upsert_bars(session, "XAU/USD", gold_bars),

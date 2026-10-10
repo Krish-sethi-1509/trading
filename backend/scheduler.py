@@ -13,8 +13,7 @@ import os
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from database import SessionLocal, engine
-from models import Base
+from database import SessionLocal
 from services import run_scheduled_prediction, run_scheduled_refresh, update_prediction_outcomes
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -47,7 +46,6 @@ def outcome_job() -> None:
 
 
 def main() -> None:
-    Base.metadata.create_all(bind=engine)
     scheduler.add_job(
         refresh_job,
         CronTrigger(minute="*", timezone="UTC"),

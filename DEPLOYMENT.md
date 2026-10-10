@@ -1,28 +1,31 @@
 # Step 10: deploy the dashboard
 
-This workspace keeps deployable files under `outputs/`. In your source
-repository, include that directory and point Render/Vercel at the project roots
-listed below. Render supports choosing a Blueprint file outside the repository
-root, which is why the Blueprint is `outputs/render.yaml`.
+This repository stores `backend/`, `frontend/`, `step3/`, and `render.yaml` at its root. Use the repository root for Render and `frontend/` for Vercel.
 
 ## 1. Prepare model and feature artifacts
 
 Before enabling `/predict` or the four-hour scheduler, train the model and make
 the saved artifact available at
-`outputs/step3/artifacts/xgb/xgboost_pipeline.joblib`. Set
-`FEATURES_CSV_PATH` to a regularly refreshed engineered feature CSV path
-relative to `outputs/`, or persist the current feature vector in
-`price_history.feature_vector`. Keep the model and feature columns in sync.
+`step3/artifacts/xgb/xgboost_pipeline.joblib` (configured in Render as `../step3/artifacts/xgb/xgboost_pipeline.joblib`, relative to `backend/`). Set `TWELVE_DATA_API_KEY` on both the API and scheduler services. The
+scheduler fetches completed 5-minute XAU/USD candles and runs the same
+`step3/feature_engineering.py` builder used by training, then stores the
+engineered row in `price_history.feature_vector` with the source candle time
+and close. Keep the model artifact and trained feature columns in sync.
 
 The API can start without model/feature files, but prediction requests return
-HTTP 503 until those files/data are present. Use a licensed intraday feed for
-model inputs; the minute quote poll is not a substitute for intraday OHLCV.
+HTTP 503 until those files/data are present. Predictions also fail closed when
+engineered features are older than `FEATURE_MAX_AGE_SECONDS` (default 900 seconds).
+Twelve Data must return at least 50 completed bars. The feature service also
+fetches FRED DFII10 observations and applies the training pipeline's one-day
+availability lag; the newest observation must be within five days. Flat minute
+quote rows are not used as model OHLCV input, and historical CSV files are not
+an inference fallback. Volume fields that the provider omits remain missing
+rather than being turned into false sweep signals.
 
 ## 2. Deploy the API and scheduler on Render
 
-1. Push the repository, including `outputs/backend`, `outputs/step3`, and
-   `outputs/render.yaml`, to your Git host.
-2. In Render, create a Blueprint and choose `outputs/render.yaml` as the
+1. Push the repository, including `backend/`, `step3/`, and `render.yaml`.
+2. In Render, create a Blueprint and choose `render.yaml` as the
    Blueprint file path. Render Blueprints normally default to root-level
    `render.yaml`, but allow a custom path. [Render Blueprint docs](https://render.com/docs/infrastructure-as-code)
 3. Review the resources before applying. The Blueprint creates a Postgres
@@ -30,7 +33,7 @@ model inputs; the minute quote poll is not a substitute for intraday OHLCV.
    declares `1c-2g` compute for the Python services and `0.5c-1g` for Postgres;
    change plans in the YAML if you prefer different capacity.
 4. Enter `GOLD_API_KEY`, `TWELVE_DATA_API_KEY`, `FRED_API_KEY`, `LLM_API_KEY`,
-   `SEARCH_API_KEY`, and `FEATURES_CSV_PATH` when prompted. For the initial
+   `SEARCH_API_KEY`, when prompted. For the initial
    `FRONTEND_URL` prompt, use `http://localhost:5173` temporarily or the
    production origin if you already know it; replace it with the Vercel origin
    after the frontend deploy in step 4 below. Do not put secret values in YAML
@@ -40,14 +43,15 @@ model inputs; the minute quote poll is not a substitute for intraday OHLCV.
 5. Confirm Render has linked the database-generated `DATABASE_URL`. The
    backend normalizes Render's `postgresql://` URL to its installed psycopg v3
    driver.
-6. Wait for the API health check at `/health` to pass. Keep only one scheduler
-   worker; the API can use multiple web workers without starting duplicate
-   cron jobs.
+6. The API start command runs `alembic upgrade head` before Uvicorn. For an
+   existing database created by the previous `create_all` startup, stamp the
+   existing schema once with `alembic stamp 0001_initial` before deploying this
+   branch. Keep one scheduler worker; API workers do not start duplicate jobs.
 
 ## 3. Deploy the React app on Vercel
 
 1. Import the same repository into Vercel.
-2. Set **Root Directory** to `outputs/frontend`.
+2. Set **Root Directory** to `frontend`.
 3. Vercel reads `vercel.json`, runs `npm run build`, and serves `dist`; the
    package also defines `vercel-build`. Vercel's Vite configuration supports
    build and output directory overrides in `vercel.json`. [Vercel Vite docs](https://vercel.com/docs/frameworks/frontend/vite)
@@ -77,12 +81,11 @@ model inputs; the minute quote poll is not a substitute for intraday OHLCV.
 
 ## 5. Optional Docker backend
 
-Build with `outputs/` as the Docker context:
+Build with the repository root as the Docker context:
 
 ```sh
-cd outputs
 docker build -t gold-mvp-api -f Dockerfile .
-docker run --rm -p 8000:8000 --env-file .env gold-mvp-api
+docker run --rm -p 8000:8000 --env-file backend/.env gold-mvp-api
 ```
 
 The Docker image runs only the API. Run `python backend/scheduler.py` as a

@@ -1,7 +1,7 @@
 """Integration smoke checks for the Step 3 ML, Step 6 API, and Step 8 config.
 
 Run from any working directory:
-    python outputs/ml/test_pipeline.py
+    python ml/test_pipeline.py
 
 The script performs a read-only `SELECT 1` against DATABASE_URL, loads the
 saved model artifact, calculates features from synthetic bars, and then runs

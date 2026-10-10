@@ -9,7 +9,7 @@ price-provider failure to confirm recent database quotes are returned with
 `is_stale: true`.
 
 Install `../backend/requirements.txt`, configure the backend environment, and
-run `python outputs/ml/test_pipeline.py` from the workspace directory. Use
+run `python ml/test_pipeline.py` from the repository root. Use
 `--skip-model` before a model artifact exists, or `--skip-keys` for local API
 contract checks without credentials. These flags skip checks; they do not
 change runtime requirements.

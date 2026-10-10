@@ -55,7 +55,16 @@ def _asof_join(
 ) -> pd.DataFrame:
     if path is None:
         return gold
-    external = _load_csv(path, value_columns)
+    if isinstance(path, pd.DataFrame):
+        external = path.copy()
+        if "timestamp" not in external:
+            raise ValueError("In-memory macro frame must contain a timestamp column")
+        external["timestamp"] = _utc_timestamp(external["timestamp"])
+        missing = set(value_columns) - set(external.columns)
+        if missing:
+            raise ValueError(f"In-memory macro frame is missing columns: {', '.join(sorted(missing))}")
+    else:
+        external = _load_csv(path, value_columns)
     external = external[["timestamp", *value_columns]]
     external["timestamp"] = external["timestamp"] + availability_lag
     collisions = (set(external.columns) & set(gold.columns)) - {"timestamp"}
@@ -113,8 +122,10 @@ def _compute_liquidity_sweeps(frame: pd.DataFrame, lookback: int, volume_window:
     high_sweep = frame["high"].gt(prior_high) & frame["close"].lt(prior_high)
     low_sweep = frame["low"].lt(prior_low) & frame["close"].gt(prior_low)
     elevated_volume = frame["relative_volume"].ge(1.5)
-    frame["liquidity_high_sweep"] = (high_sweep & elevated_volume).astype("int8")
-    frame["liquidity_low_sweep"] = (low_sweep & elevated_volume).astype("int8")
+    volume_observed = frame["relative_volume"].notna()
+    # Unknown volume must not be represented as a confirmed absence of a sweep.
+    frame["liquidity_high_sweep"] = np.where(volume_observed, (high_sweep & elevated_volume).astype(float), np.nan)
+    frame["liquidity_low_sweep"] = np.where(volume_observed, (low_sweep & elevated_volume).astype(float), np.nan)
     # A downside break followed by a close back above support on elevated
     # volume is a reproducible bullish ChoCH/reclaim proxy.
     frame["choch_bullish_reclaim"] = frame["liquidity_low_sweep"]
@@ -157,8 +168,8 @@ def _compute_yield_divergence(frame: pd.DataFrame, window: int) -> None:
 def build_features(
     gold: pd.DataFrame,
     *,
-    tips: str | None = None,
-    dxy: str | None = None,
+    tips: str | pd.DataFrame | None = None,
+    dxy: str | pd.DataFrame | None = None,
     futures: str | None = None,
     cot: str | None = None,
     options: str | None = None,
@@ -168,6 +179,7 @@ def build_features(
     return_window: int = 48,
     macro_window_minutes: int = 30,
     round_number_step: float = 100.0,
+    use_volume: bool = False,
 ) -> pd.DataFrame:
     """Return a chronologically sorted feature frame from gold OHLCV data."""
     required = {"timestamp", *OHLCV}
@@ -181,6 +193,10 @@ def build_features(
         frame[column] = pd.to_numeric(frame[column], errors="raise")
     if (frame["volume"] < 0).any():
         raise ValueError("volume cannot be negative")
+    # Live XAU/USD providers do not expose consolidated OTC volume. Default to
+    # the same missing-volume contract during training and inference.
+    if not use_volume:
+        frame["volume"] = np.nan
     if (frame["close"] <= 0).any():
         raise ValueError("close prices must be positive")
 
@@ -207,6 +223,8 @@ def build_features(
     ).max(axis=1)
     frame["atr_14"] = true_range.rolling(14, min_periods=14).mean()
     frame["candlestick_body_atr"] = (frame["close"] - frame["open"]) / frame["atr_14"].replace(0, np.nan)
+    frame["prior_liquidity_high_distance_atr"] = (frame["prior_liquidity_high"] - frame["close"]) / frame["atr_14"].replace(0, np.nan)
+    frame["prior_liquidity_low_distance_atr"] = (frame["close"] - frame["prior_liquidity_low"]) / frame["atr_14"].replace(0, np.nan)
     frame["bullish_momentum"] = (frame["close"].gt(frame["open"]) & frame["candlestick_body_atr"].ge(0.5)).astype("int8")
     frame["bearish_momentum"] = (frame["close"].lt(frame["open"]) & frame["candlestick_body_atr"].le(-0.5)).astype("int8")
     # Three-candle fair value gaps; emitted on the confirming candle.
@@ -232,6 +250,7 @@ def build_features(
     nearest_round = (frame["close"] / round_number_step).round() * round_number_step
     frame["nearest_round_number"] = nearest_round
     frame["round_number_distance"] = nearest_round - frame["close"]
+    frame["round_number_distance_atr"] = frame["round_number_distance"] / frame["atr_14"].replace(0, np.nan)
     frame["price_acceleration"] = frame["close"].pct_change().diff()
     frame["round_number_squeeze_proxy"] = (
         frame["round_number_distance"].abs().le(round_number_step * 0.02)
@@ -254,9 +273,9 @@ def build_features(
             valid = (candidates >= 0) & (candidates < len(release_times))
             near_release[valid] |= np.abs(bar_times[valid] - release_times[candidates[valid]]) <= half_window
         frame["macro_release_window"] = near_release.astype("int8")
-        frame["institutional_buying_proxy"] = (
-            near_release & frame["close"].gt(frame["open"]) & frame["relative_volume"].ge(1.5)
-        ).astype("int8")
+        volume_observed = frame["relative_volume"].notna()
+        signal = near_release & frame["close"].gt(frame["open"]) & frame["relative_volume"].ge(1.5)
+        frame["institutional_buying_proxy"] = np.where(volume_observed, signal.astype(float), np.nan)
     else:
         frame["macro_release_window"] = 0
         frame["institutional_buying_proxy"] = 0
@@ -279,6 +298,7 @@ def main() -> int:
     parser.add_argument("--return-window", type=int, default=48)
     parser.add_argument("--macro-window-minutes", type=int, default=30)
     parser.add_argument("--round-number-step", type=float, default=100.0)
+    parser.add_argument("--use-volume", action="store_true", help="Opt into provider-specific volume; incompatible with live mode")
     args = parser.parse_args()
     if min(args.sweep_lookback, args.volume_window, args.return_window) < 2:
         parser.error("lookback windows must be at least 2")
@@ -298,6 +318,7 @@ def main() -> int:
         return_window=args.return_window,
         macro_window_minutes=args.macro_window_minutes,
         round_number_step=args.round_number_step,
+        use_volume=args.use_volume,
     )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

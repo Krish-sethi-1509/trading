@@ -1,0 +1,51 @@
+name: tests
+
+on:
+  push:
+    branches: [main, "fix/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-and-ml:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: backend
+      DATABASE_URL: postgresql+psycopg://test:test@localhost/test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            step3/requirements.txt
+      - run: python -m pip install -r backend/requirements.txt -r step3/requirements.txt
+      - run: python -m unittest discover -s backend/tests -v
+      - name: Verify Alembic migrations
+        run: |
+          alembic upgrade head
+          python -c "from sqlalchemy import create_engine, inspect; tables = set(inspect(create_engine('sqlite:///ci_migrations.db')).get_table_names()); required = {'price_history', 'predictions_log', 'market_bars', 'economic_observations'}; assert required <= tables, f'Missing tables: {required - tables}'"
+        env:
+          DATABASE_URL: sqlite:///ci_migrations.db
+      - name: Train and evaluate on the checked-in historical sample
+        run: |
+          python step3/feature_engineering.py \
+            --gold step3/data/xauusd_5m.csv \
+            --tips step3/data/tips.csv \
+            --output "$RUNNER_TEMP/xauusd_features.csv"
+          python step3/train_xgboost.py \
+            --input "$RUNNER_TEMP/xauusd_features.csv" \
+            --output-dir "$RUNNER_TEMP/xauusd_evaluation"
+          cat "$RUNNER_TEMP/xauusd_evaluation/metrics.json"
+      - name: Save evaluation outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: xauusd-evaluation-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/xauusd_evaluation/metrics.json
+            ${{ runner.temp }}/xauusd_evaluation/test_predictions.csv
+            ${{ runner.temp }}/xauusd_evaluation/classification_report.csv
+            ${{ runner.temp }}/xauusd_evaluation/confusion_matrix.csv
+          if-no-files-found: error
